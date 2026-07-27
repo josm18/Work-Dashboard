@@ -19,7 +19,6 @@
         <nav class="main-nav" aria-label="Primary navigation">
           <button class="nav-link active" data-view="home"><span>⌂</span>Overview</button>
           <button class="nav-link" data-view="workspaces"><span>◫</span>Workspaces</button>
-          <button class="nav-link" data-view="calendar"><span>□</span>Calendar</button>
         </nav>
         <div class="sidebar-label">WORKSPACES</div>
         <div class="workspace-nav" id="workspaceNav"></div>
@@ -58,7 +57,7 @@
               <button class="text-button" id="addFocus">+ Add a focus task</button>
             </section>
             <section class="panel deadline-panel">
-              <div class="panel-heading"><div><p class="eyebrow">UP NEXT</p><h2>Deadlines</h2></div><button class="small-link" data-view="calendar">View calendar →</button></div>
+              <div class="panel-heading"><div><p class="eyebrow">UP NEXT</p><h2>Deadlines</h2></div><button class="small-link" data-view="workspaces">Workspace timelines →</button></div>
               <div class="deadline-list" id="deadlineList"></div>
             </section>
           </div>
@@ -78,11 +77,6 @@
           <div class="page-heading compact"><div><p class="eyebrow">YOUR PORTFOLIO</p><h1>Workspaces</h1><p class="subheading">Projects and courses in one place.</p></div><button class="quick-add" id="newWorkspaceTop">+ New workspace</button></div>
           <div class="filter-bar" id="filterBar"><button class="filter active" data-filter="all">Active</button><button class="filter" data-filter="project">Projects</button><button class="filter" data-filter="course">Courses</button><button class="filter" data-filter="attention">Needs attention</button><button class="filter" data-filter="completed">Completed</button></div>
           <div class="portfolio-list" id="portfolioList"></div>
-        </section>
-
-        <section class="view" id="calendarView">
-          <div class="page-heading compact"><div><p class="eyebrow">YOUR SCHEDULE</p><h1>Calendar</h1><p class="subheading">Key dates across every workspace.</p></div></div>
-          <div class="calendar-layout"><section class="panel timeline-panel"><div class="panel-heading"><div><p class="eyebrow">JULY / AUGUST</p><h2>Upcoming dates</h2></div></div><div id="calendarList" class="calendar-list"></div></section><aside class="panel calendar-note"><p class="eyebrow">A SMALL RULE</p><h2>Give every deadline a next action.</h2><p>Dates create urgency. A clearly named next task creates momentum.</p></aside></div>
         </section>
 
         <section class="view workspace-view" id="detailView">
@@ -109,7 +103,7 @@
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceEditorTitle">
         <button class="close-modal" id="closeWorkspaceEditor" aria-label="Close">×</button>
         <p class="eyebrow">WORKSPACE SETTINGS</p><h2 id="workspaceEditorTitle">Edit workspace</h2>
-        <form id="workspaceEditorForm"><label>Name<input id="editWorkspaceName" required maxlength="80" /></label><label>Type<select id="editWorkspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>Objective<input id="editWorkspaceGoal" maxlength="160" /></label><label>Current phase<input id="editWorkspacePhase" maxlength="80" placeholder="e.g. Data analysis" /></label><label>Authors / collaborators<input id="editWorkspaceAuthors" maxlength="160" placeholder="Separate names with commas" /></label><label>Tags<input id="editWorkspaceTags" maxlength="160" placeholder="e.g. fieldwork, manuscript, urgent" /></label><label>Next deadline<input id="editWorkspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Save workspace</button></form>
+        <form id="workspaceEditorForm"><label>Name<input id="editWorkspaceName" required maxlength="80" /></label><label>Type<select id="editWorkspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>State<select id="editWorkspaceState"><option value="on_track">On track</option><option value="needs_attention">Needs attention</option><option value="paused">Paused</option><option value="finished">Finished</option></select></label><label>Workspace color<input id="editWorkspaceColor" type="color" value="#799b7c" /></label><label>Objective<input id="editWorkspaceGoal" maxlength="160" /></label><label>Current phase<input id="editWorkspacePhase" maxlength="80" placeholder="e.g. Data analysis" /></label><label>Authors / collaborators<input id="editWorkspaceAuthors" maxlength="160" placeholder="Separate names with commas" /></label><label>Tags<input id="editWorkspaceTags" maxlength="160" placeholder="e.g. fieldwork, manuscript, urgent" /></label><label>Next deadline<input id="editWorkspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Save workspace</button></form>
       </section>
     </div>
 
