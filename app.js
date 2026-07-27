@@ -22,6 +22,8 @@ let currentView = 'home';
 let activeTab = 'overview';
 let workspaceFilter = 'all';
 let activeNoteId = null;
+let plannerWeekOffset = 0;
+let editingTask = null;
 let supabaseClient = null;
 let cloudUser = null;
 let cloudEnabled = false;
@@ -29,7 +31,7 @@ let cloudSaveTimer = null;
 
 function normalizeData(candidate){
   const saved = candidate && Array.isArray(candidate.workspaces) ? candidate : structuredClone(initialData);
-  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; });
+  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; (workspace.tasks||[]).forEach(task=>{ if(!task.priority)task.priority='medium'; if(!Array.isArray(task.tags))task.tags=[]; if(!Array.isArray(task.subtasks))task.subtasks=[]; if(!task.description)task.description=''; }); });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
   return saved;
@@ -151,10 +153,14 @@ function setWorkspaceState(w,state){
 }
 function accentTextColor(hex){ const clean=(hex || '#799b7c').replace('#',''); const r=parseInt(clean.slice(0,2),16)||0; const g=parseInt(clean.slice(2,4),16)||0; const b=parseInt(clean.slice(4,6),16)||0; return ((r*299+g*587+b*114)/1000)>155?'#3e5742':'#eef4ed'; }
 function nextWorkspaceDeadline(w){
-  const entries=[]; if(w.deadline)entries.push({date:w.deadline,title:'Workspace deadline',type:'Deadline'}); (w.dates||[]).forEach(item=>entries.push(item)); (w.tasks||[]).filter(task=>task.dueDate).forEach(task=>entries.push({date:task.dueDate,title:task.title,type:'Task'}));
+  const entries=[]; if(w.deadline)entries.push({date:w.deadline,title:'Workspace deadline',type:'Deadline'}); (w.dates||[]).forEach(item=>entries.push(item)); (w.tasks||[]).filter(task=>task.dueDate && !task.done).forEach(task=>entries.push({date:task.dueDate,title:task.title,type:'Task'}));
   const today=new Date().toISOString().slice(0,10); const future=entries.filter(item=>item.date>=today); const dates=(future.length?future:entries).sort((a,b)=>a.date.localeCompare(b.date)); return dates[0] || null;
 }
 function daysUntil(value){ return Math.round((new Date(`${value}T12:00:00`)-new Date('2026-07-27T12:00:00'))/86400000); }
+function parseTags(value=''){ return [...new Set(value.split(',').map(tag=>tag.trim().replace(/^#/,'')).filter(Boolean))]; }
+function localDateKey(date){ const year=date.getFullYear(); const month=String(date.getMonth()+1).padStart(2,'0'); const day=String(date.getDate()).padStart(2,'0'); return `${year}-${month}-${day}`; }
+function plannerMonday(){ const date=new Date(); date.setHours(12,0,0,0); date.setDate(date.getDate()-((date.getDay()+6)%7)+(plannerWeekOffset*7)); return date; }
+function plannerDates(){ const monday=plannerMonday(); return Array.from({length:5},(_,index)=>{ const day=new Date(monday); day.setDate(monday.getDate()+index); return {date:localDateKey(day),day}; }); }
 function healthStyle(w){ const tones={green:['var(--sage)','var(--sage-ink)'],amber:['var(--amber)','var(--amber-ink)'],gray:['#e7e8e4','#727b73'],coral:['var(--coral)','var(--coral-ink)']}; const [bg,ink]=tones[w.status==='completed'?'gray':w.healthTone]||tones.green; return `--health:${bg};--health-ink:${ink};`; }
 function titleCase(v){ return v[0].toUpperCase()+v.slice(1); }
 
@@ -167,7 +173,7 @@ function renderFocus(){
   document.getElementById('focusList').innerHTML=focus.length?focus.map(t=>taskHtml(t,t.workspace,true)).join(''):'<p class="portfolio-empty">No focus tasks yet. Choose one small thing to begin.</p>';
   document.getElementById('focusCount').textContent=`${focus.filter(t=>t.done).length} of ${focus.length}`;
 }
-function taskHtml(t,w,showWs=false,allowDelete=false){return `<div class="task-item ${t.done?'done':''}"><label class="task-select"><input class="check" type="checkbox" data-task="${t.id}" data-workspace="${w.id}" ${t.done?'checked':''}/><span class="task-copy"><span class="task-title">${escapeHtml(t.title)}</span><span class="task-meta">${showWs?`<b>${escapeHtml(w.name)}</b> · `:''}${escapeHtml(t.due||'No date')}</span></span></label>${allowDelete?`<button class="delete-task" data-delete-task="${t.id}" data-task-workspace="${w.id}">Delete</button>`:''}</div>`;}
+function taskHtml(t,w,showWs=false,allowManage=false){const subtaskText=t.subtasks?.length?`<span class="task-subtask-count">${t.subtasks.filter(item=>item.done).length}/${t.subtasks.length} subtasks</span>`:'';return `<div class="task-item ${t.done?'done':''}"><label class="task-select"><input class="check" type="checkbox" data-task="${t.id}" data-workspace="${w.id}" ${t.done?'checked':''}/><span class="task-copy"><span class="task-title">${escapeHtml(t.title)}${t.priority&&t.priority!=='medium'?`<em class="task-priority">${t.priority.toUpperCase()}</em>`:''}</span><span class="task-meta">${showWs?`<b>${escapeHtml(w.name)}</b> · `:''}${escapeHtml(t.due||'No date')}</span>${subtaskText}</span></label>${allowManage?`<button class="edit-task" data-edit-task="${t.id}" data-task-workspace="${w.id}">Edit</button><button class="delete-task" data-delete-task="${t.id}" data-task-workspace="${w.id}">Delete</button>`:''}</div>`;}
 function renderDeadlines(){
   const dates=activeWorkspaces().map(workspace=>{const deadline=nextWorkspaceDeadline(workspace);return deadline?{...deadline,workspace}:null;}).filter(Boolean).sort((a,b)=>a.date.localeCompare(b.date)).slice(0,4);
   document.getElementById('deadlineList').innerHTML=dates.map(d=>{const dt=new Date(`${d.date}T12:00:00`);return `<div class="deadline-item"><div class="deadline-date"><b>${dt.getDate()}</b>${dt.toLocaleDateString('en-GB',{month:'short'}).toUpperCase()}</div><div><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.workspace.name)} · ${escapeHtml(d.type)}</p></div></div>`}).join('');
@@ -175,17 +181,34 @@ function renderDeadlines(){
 function cardHtml(w){ const pct=progress(w); const next=nextWorkspaceDeadline(w); return `<article class="workspace-card" data-open-workspace="${w.id}" style="--accent:${w.accent};${healthStyle(w)}"><div class="card-top"><span class="type-label">${w.kind.toUpperCase()}</span><span class="health">${workspaceStateLabel(w)}</span></div><h3>${escapeHtml(w.name)}</h3><p class="card-goal">${escapeHtml(w.goal)}</p><div class="card-bottom"><div class="progress-text"><span>PROGRESS</span><span>${pct}%</span></div><div class="progress-track"><div class="progress-bar" style="width:${pct}%"></div></div><div class="card-date">${next?`Next: <strong>${fmtDate(next.date)}</strong> · ${escapeHtml(next.title)}`:'No active deadline'}</div></div></article>`; }
 function renderCards(){ const active=activeWorkspaces(); document.getElementById('workspaceGrid').innerHTML=active.map(cardHtml).join(''); document.getElementById('activeWorkspaceTitle').textContent=`Your ${active.length} active workspace${active.length===1?'':'s'}`; }
 function renderInsights(){ const attention=activeWorkspaces().filter(w=>w.health==='Needs attention'); const title=attention.length?attention.map(w=>w.name).join(' & '):'No workspace needs attention'; document.getElementById('attentionTitle').textContent=title; document.getElementById('attentionText').textContent=attention.length?'A deadline or unfinished next action is asking for a closer look.':'You are in a good place.'; const completed=allTasks().filter(t=>t.done).length; const total=allTasks().length; document.getElementById('weekProgress').textContent=`${completed} of ${total} tasks complete`; }
-function renderHome(){ renderFocus();renderDeadlines();renderCards();renderInsights(); }
+function renderReminders(){
+  const today=localDateKey(new Date());
+  const reminders=activeWorkspaces().flatMap(workspace=>{
+    const next=nextWorkspaceDeadline(workspace);
+    if(!next)return [];
+    const distance=Math.round((new Date(`${next.date}T12:00:00`)-new Date(`${today}T12:00:00`))/86400000);
+    return distance<=7?[{workspace,...next,distance}]:[];
+  }).sort((a,b)=>a.date.localeCompare(b.date));
+  document.getElementById('reminderList').innerHTML=reminders.length?reminders.map(item=>{
+    const label=item.distance<0?`${Math.abs(item.distance)} day${Math.abs(item.distance)===1?'':'s'} overdue`:item.distance===0?'Due today':item.distance===1?'Due tomorrow':`Due in ${item.distance} days`;
+    const tone=item.distance<0?'overdue':item.distance<=2?'soon':'upcoming';
+    return `<button class="reminder-item" data-open-workspace="${item.workspace.id}"><span class="reminder-level ${tone}">${label}</span><span class="reminder-copy"><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(item.workspace.name)} · ${fmtDate(item.date)}</small></span><span>›</span></button>`;
+  }).join(''):'<p class="portfolio-empty">Nothing is due in the next seven days.</p>';
+}
+function renderTodayDate(){ const today=new Date(); document.getElementById('todayWeekday').textContent=today.toLocaleDateString('en-GB',{weekday:'short'}).toUpperCase(); document.getElementById('todayDate').textContent=today.getDate(); document.getElementById('todayMonth').textContent=today.toLocaleDateString('en-GB',{month:'short'}).toUpperCase(); }
+function renderHome(){ renderFocus();renderDeadlines();renderCards();renderInsights();renderTodayDate();renderWeekPlanner();renderReminders(); }
 function renderPortfolio(){ const list=data.workspaces.filter(w=>{ if(workspaceFilter==='completed') return w.status==='completed'; if(w.status==='completed') return false; if(workspaceFilter==='all') return true; return workspaceFilter==='attention'?w.health==='Needs attention':w.kind===workspaceFilter; }); document.getElementById('portfolioList').innerHTML=list.length?list.map(w=>{const pct=progress(w);const next=nextWorkspaceDeadline(w);return `<article class="portfolio-row" data-open-workspace="${w.id}" style="--accent:${w.accent};${healthStyle(w)}"><div class="portfolio-title"><span class="portfolio-dot"></span><div><h3>${escapeHtml(w.name)}</h3><p>${titleCase(w.kind)} · ${escapeHtml(w.phase)}</p></div></div><span class="health">${workspaceStateLabel(w)}</span><div class="row-progress"><div class="progress-text"><span>PROGRESS</span><span>${pct}%</span></div><div class="progress-track"><div class="progress-bar" style="width:${pct}%;background:${w.accent}"></div></div></div><div class="row-date">${next?`Next deadline<br><strong>${fmtDate(next.date)}</strong>`:w.status==='completed'?`Finished<br><strong>${fmtDate(w.completedAt)}</strong>`:'<strong>No deadline</strong>'}</div><span class="row-arrow">›</span></article>`}).join(''):`<p class="portfolio-empty">${workspaceFilter==='completed'?'No completed workspaces yet.':'Nothing in this view.'}</p>`;
 }
 function renderWeekPlanner(){
-  const week=['2026-07-27','2026-07-28','2026-07-29','2026-07-30','2026-07-31'];
+  const week=plannerDates();
   const active=activeWorkspaces();
-  const plans=week.map(date=>({date,day:new Date(`${date}T12:00:00`),plan:data.weekPlan[date]||{morning:'',afternoon:''}}));
+  const plans=week.map(({date,day})=>({date,day,plan:data.weekPlan[date]||{morning:'',afternoon:''}}));
   const options=(plan,field)=>[`<option value="">—</option>`,...active.map(w=>`<option value="${w.id}" ${plan[field]===w.id?'selected':''}>${escapeHtml(w.name)}</option>`)].join('');
   const dayHeader=`<div class="mini-plan week-days"><span></span>${plans.map(({day})=>`<span>${day.toLocaleDateString('en-GB',{weekday:'short'}).toUpperCase()}<b>${day.getDate()}</b></span>`).join('')}</div>`;
   const row=(field,label)=>`<div class="mini-plan"><time>${label.toUpperCase()}</time>${plans.map(({date,plan})=>`<select aria-label="${label} workspace for ${date}" data-plan-date="${date}" data-plan-field="${field}">${options(plan,field)}</select>`).join('')}</div>`;
   document.getElementById('weekPlanner').innerHTML=dayHeader+row('morning','Morning')+row('afternoon','Afternoon');
+  const start=plans[0].day; const end=plans[plans.length-1].day;
+  document.getElementById('weekRange').textContent=`${start.toLocaleDateString('en-GB',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}`;
 }
 function renderCalendar(){ renderWeekPlanner(); const dates=activeWorkspaces().flatMap(w=>w.dates.map(d=>({...d,workspace:w}))).sort((a,b)=>a.date.localeCompare(b.date)); document.getElementById('calendarList').innerHTML=dates.map(d=>`<article class="calendar-event" style="--accent:${d.workspace.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.workspace.name)} · ${escapeHtml(d.type)}</p></div></article>`).join(''); }
 function heroHtml(w){const next=nextWorkspaceDeadline(w);return `<p class="project-kind">${w.kind.toUpperCase()} · ${escapeHtml(w.phase)}</p><div class="project-title-line"><h1>${escapeHtml(w.name)}</h1><span class="health" style="${healthStyle(w)}">${workspaceStateLabel(w)}</span></div><p>${escapeHtml(w.goal)}</p><div class="hero-meta"><span class="meta-chip">${progress(w)}% task progress</span>${next?`<span class="meta-chip">Next: ${fmtDate(next.date)} · ${escapeHtml(next.title)}</span>`:''}<span class="meta-chip">${escapeHtml(w.collaborators)}</span>${w.tags.map(tag=>`<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('')}</div>`;}
@@ -209,11 +232,25 @@ function closeModal(){document.getElementById('modalBackdrop').hidden=true;}
 function openWorkspaceModal(){ document.getElementById('workspaceModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('workspaceName').focus(),10); }
 function closeWorkspaceModal(){ document.getElementById('workspaceModalBackdrop').hidden=true; }
 function workspaceId(name){ return `${name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'workspace'}-${Date.now().toString(36)}`; }
+const workspaceTemplates={
+  custom:{},
+  literature:{kind:'project',goal:'Map the evidence and turn it into a defensible synthesis.',phase:'Literature review',tags:['literature','reading'],tasks:['Define the review question','Set inclusion and exclusion criteria','Screen the first batch of sources'],noteTitle:'Review protocol',noteBody:'Record search terms, databases, inclusion criteria, and decisions that affect the review.'},
+  experiment:{kind:'project',goal:'Plan, run, and document a rigorous study or fieldwork cycle.',phase:'Study planning',tags:['methods','data'],tasks:['Write the study protocol','Prepare materials and logistics','Create a data-quality checklist'],noteTitle:'Study log',noteBody:'Capture field decisions, deviations from protocol, observations, and questions to resolve.'},
+  manuscript:{kind:'project',goal:'Move a research story from outline to submission.',phase:'Outline',tags:['writing','publication'],tasks:['Draft the paper outline','List target figures and tables','Choose a target journal'],noteTitle:'Manuscript decisions',noteBody:'Track the central claim, audience, journal requirements, and editorial decisions.'},
+  course:{kind:'course',goal:'Turn course material into steady weekly progress.',phase:'Week 1',tags:['coursework','study'],tasks:['Review this week’s learning objectives','Block a study session','Capture questions for the next class'],noteTitle:'Course notes',noteBody:'Keep concise notes, worked examples, questions, and links to useful course material.'}
+};
+function applyWorkspaceTemplate(){
+  const template=workspaceTemplates[document.getElementById('workspaceTemplate').value] || {};
+  if(!Object.keys(template).length)return;
+  document.getElementById('workspaceKind').value=template.kind;
+  if(!document.getElementById('workspaceGoal').value.trim())document.getElementById('workspaceGoal').value=template.goal;
+}
 function createWorkspaceFromForm(){
-  const name=document.getElementById('workspaceName').value.trim(); const kind=document.getElementById('workspaceKind').value; const goal=document.getElementById('workspaceGoal').value.trim(); const deadline=document.getElementById('workspaceDeadline').value;
+  const name=document.getElementById('workspaceName').value.trim(); const kind=document.getElementById('workspaceKind').value; const goal=document.getElementById('workspaceGoal').value.trim(); const deadline=document.getElementById('workspaceDeadline').value; const template=workspaceTemplates[document.getElementById('workspaceTemplate').value] || {};
   if(!name)return;
   const palette=[['#799b7c','#406044'],['#7697aa','#416576'],['#a78db3','#675476'],['#b6926f','#76583f'],['#c39750','#805a1a'],['#7e9c91','#41675c']]; const [accent,accentInk]=palette[data.workspaces.length%palette.length]; const id=workspaceId(name);
-  const workspace={id,name,kind,status:'active',accent,accentInk,health:'On track',healthTone:'green',goal:goal||`A new ${kind==='course'?'course':'research project'} workspace.`,deadline,phase:kind==='course'?'Getting started':'Planning',collaborators:kind==='course'?'Coursework':'You',tags:[],tasks:[],notes:[{id:`note-${Date.now()}`,title:'Start here',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:'Capture your first ideas, decisions, or next steps here.'}],images:[],resources:[],dates:deadline?[{date:deadline,title:'First deadline',type:kind==='course'?'Assignment':'Deadline'}]:[]};
+  const timestamp=Date.now();
+  const workspace={id,name,kind,status:'active',accent,accentInk,health:'On track',healthTone:'green',goal:goal||template.goal||`A new ${kind==='course'?'course':'research project'} workspace.`,deadline,phase:template.phase || (kind==='course'?'Getting started':'Planning'),collaborators:kind==='course'?'Coursework':'You',tags:[...(template.tags||[])],tasks:(template.tasks||[]).map((title,index)=>({id:`task-${timestamp}-${index}`,title,done:false,due:'No date',dueDate:'',focus:false,priority:'medium',tags:[],description:'',subtasks:[]})),notes:[{id:`note-${timestamp}`,title:template.noteTitle || 'Start here',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:template.noteBody || 'Capture your first ideas, decisions, or next steps here.'}],images:[],resources:[],dates:deadline?[{date:deadline,title:'First deadline',type:kind==='course'?'Assignment':'Deadline'}]:[]};
   data.workspaces.push(workspace); saveData(); document.getElementById('workspaceForm').reset(); closeWorkspaceModal(); openWorkspace(id); toast(`${name} created`);
 }
 async function deleteCurrentWorkspace(){
@@ -257,10 +294,50 @@ function closeResourceModal(){ document.getElementById('resourceModalBackdrop').
 function saveResource(){ const workspace=getWs(); const title=document.getElementById('resourceName').value.trim(); const url=document.getElementById('resourceUrl').value.trim(); if(!workspace || !title || !url)return; workspace.resources.push({title,url,meta:document.getElementById('resourceMeta').value.trim() || 'External link'}); saveData(); closeResourceModal(); renderDetail(); toast('Resource link added'); }
 function deleteResource(index){ const workspace=getWs(); const item=workspace?.resources[index]; if(!item || !window.confirm(`Delete the link “${item.title}”?`))return; workspace.resources.splice(index,1); saveData(); renderDetail(); toast('Resource link deleted'); }
 function deleteTask(workspaceId,taskId){ const workspace=getWs(workspaceId); const task=workspace?.tasks.find(item=>item.id===taskId); if(!task || !window.confirm(`Delete task “${task.title}”?`))return; workspace.tasks=workspace.tasks.filter(item=>item.id!==taskId); saveData(); renderAll(); toast('Task deleted'); }
+function openTaskEditor(workspaceId,taskId){
+  const workspace=getWs(workspaceId); const task=workspace?.tasks.find(item=>item.id===taskId); if(!task)return;
+  editingTask={workspaceId,taskId};
+  document.getElementById('taskEditorTitle').textContent=`Edit task · ${workspace.name}`;
+  document.getElementById('editTaskTitle').value=task.title;
+  document.getElementById('editTaskDue').value=task.dueDate || '';
+  document.getElementById('editTaskPriority').value=task.priority || 'medium';
+  document.getElementById('editTaskTags').value=(task.tags||[]).join(', ');
+  document.getElementById('editTaskDescription').value=task.description || '';
+  document.getElementById('editTaskSubtasks').value=(task.subtasks||[]).map(item=>typeof item==='string'?item:item.title).join('\n');
+  document.getElementById('editTaskFocus').checked=Boolean(task.focus);
+  document.getElementById('taskEditorBackdrop').hidden=false;
+  setTimeout(()=>document.getElementById('editTaskTitle').focus(),10);
+}
+function closeTaskEditor(){ document.getElementById('taskEditorBackdrop').hidden=true; editingTask=null; }
+function saveTaskEditor(){
+  if(!editingTask)return;
+  const workspace=getWs(editingTask.workspaceId); const task=workspace?.tasks.find(item=>item.id===editingTask.taskId); const title=document.getElementById('editTaskTitle').value.trim();
+  if(!workspace || !task || !title)return;
+  const dueDate=document.getElementById('editTaskDue').value;
+  const original=task.subtasks || [];
+  const priorDone=Object.fromEntries(original.filter(item=>typeof item==='object').map(item=>[item.title,item.done]));
+  task.title=title; task.dueDate=dueDate; task.due=dueDate?fmtDate(dueDate):'No date'; task.priority=document.getElementById('editTaskPriority').value; task.tags=parseTags(document.getElementById('editTaskTags').value); task.description=document.getElementById('editTaskDescription').value.trim(); task.focus=document.getElementById('editTaskFocus').checked;
+  task.subtasks=document.getElementById('editTaskSubtasks').value.split('\n').map(item=>item.trim()).filter(Boolean).map((title,index)=>({id:`sub-${Date.now()}-${index}`,title,done:Boolean(priorDone[title])}));
+  saveData(); closeTaskEditor(); renderAll(); toast('Task updated');
+}
+function openSearchModal(){ document.getElementById('searchModalBackdrop').hidden=false; document.getElementById('searchInput').value=''; renderSearchResults(''); setTimeout(()=>document.getElementById('searchInput').focus(),10); }
+function closeSearchModal(){ document.getElementById('searchModalBackdrop').hidden=true; }
+function renderSearchResults(query){
+  const term=query.trim().toLowerCase(); const results=[];
+  if(term){ data.workspaces.forEach(workspace=>{
+    const workspaceText=[workspace.name,workspace.goal,workspace.phase,workspace.collaborators,...(workspace.tags||[])].join(' ').toLowerCase();
+    if(workspaceText.includes(term))results.push({type:'Workspace',title:workspace.name,detail:workspace.goal,workspaceId:workspace.id});
+    workspace.tasks.forEach(task=>{ if([task.title,task.description,...(task.tags||[])].join(' ').toLowerCase().includes(term))results.push({type:'Task',title:task.title,detail:workspace.name,workspaceId:workspace.id}); });
+    workspace.notes.forEach(note=>{ if([note.title,note.body].join(' ').toLowerCase().includes(term))results.push({type:'Note',title:note.title,detail:workspace.name,workspaceId:workspace.id,noteId:note.id}); });
+    workspace.resources.forEach(resource=>{ if([resource.title,resource.meta,resource.url].join(' ').toLowerCase().includes(term))results.push({type:'Resource',title:resource.title,detail:workspace.name,workspaceId:workspace.id,tab:'resources'}); });
+  }); }
+  document.getElementById('searchResults').innerHTML=!term?'<p class="portfolio-empty">Search workspace names, tasks, notes, tags, and resources.</p>':results.length?results.slice(0,30).map(result=>`<button class="search-result" data-search-workspace="${result.workspaceId}" ${result.noteId?`data-search-note="${result.noteId}"`:''} ${result.tab?`data-search-tab="${result.tab}"`:''}><span>${result.type}</span><strong>${escapeHtml(result.title)}</strong><small>${escapeHtml(result.detail)}</small></button>`).join(''):'<p class="portfolio-empty">No matches found.</p>';
+}
 function saveActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note)return; note.title=document.getElementById('noteTitle').value.trim() || 'Untitled note'; note.body=document.getElementById('noteEditor').innerText.trim(); note.date=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(); saveData(); renderDetail(); toast('Note saved'); }
 function deleteActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note || !window.confirm(`Delete “${note.title}”?`))return; workspace.notes=workspace.notes.filter(item=>item.id!==note.id); activeNoteId=workspace.notes[0]?.id || null; saveData(); renderDetail(); toast('Note deleted'); }
 
 document.addEventListener('click',e=>{
+  const searchResult=e.target.closest('[data-search-workspace]'); if(searchResult){activeWorkspace=searchResult.dataset.searchWorkspace;activeTab=searchResult.dataset.searchTab || (searchResult.dataset.searchNote?'notes':'overview');if(searchResult.dataset.searchNote)activeNoteId=searchResult.dataset.searchNote;closeSearchModal();openView('detail');return;}
   const open=e.target.closest('[data-open-workspace]'); if(open){openWorkspace(open.dataset.openWorkspace);return;}
   const view=e.target.closest('[data-view]'); if(view){openView(view.dataset.view);return;}
   const filter=e.target.closest('[data-filter]'); if(filter){workspaceFilter=filter.dataset.filter;document.querySelectorAll('.filter').forEach(b=>b.classList.toggle('active',b===filter));renderPortfolio();return;}
@@ -279,11 +356,14 @@ document.addEventListener('click',e=>{
   if(e.target.closest('#closeWorkspaceEditor'))closeWorkspaceEditor();
   if(e.target.closest('#closeDateModal'))closeDateModal();
   if(e.target.closest('#closeResourceModal'))closeResourceModal();
+  if(e.target.closest('#closeTaskEditor'))closeTaskEditor();
+  if(e.target.closest('#closeSearchModal'))closeSearchModal();
   if(e.target.closest('#menuButton'))document.getElementById('sidebar').classList.toggle('open');
   if(e.target.closest('[data-add-task]'))openModal(e.target.closest('[data-add-task]').dataset.addTask);
   if(e.target.closest('#newNote')){const w=getWs();const note={id:`n${Date.now()}`,title:'Untitled note',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:''};w.notes.unshift(note);activeNoteId=note.id;saveData();renderDetail();toast('New note page created');}
   if(e.target.closest('#saveNote'))saveActiveNote();
   if(e.target.closest('#deleteNote'))deleteActiveNote();
+  if(e.target.closest('[data-edit-task]')){const taskButton=e.target.closest('[data-edit-task]');openTaskEditor(taskButton.dataset.taskWorkspace,taskButton.dataset.editTask);}
   if(e.target.closest('[data-delete-task]')){const taskButton=e.target.closest('[data-delete-task]');deleteTask(taskButton.dataset.taskWorkspace,taskButton.dataset.deleteTask);}
   if(e.target.closest('#uploadImageButton'))document.getElementById('imageUpload').click();
   if(e.target.closest('[data-delete-image]'))deleteResearchImage(e.target.closest('[data-delete-image]').dataset.deleteImage);
@@ -291,10 +371,12 @@ document.addEventListener('click',e=>{
   if(e.target.closest('[data-delete-date]'))deleteDate(Number(e.target.closest('[data-delete-date]').dataset.deleteDate));
   if(e.target.closest('#addResource'))openResourceModal();
   if(e.target.closest('[data-delete-resource]'))deleteResource(Number(e.target.closest('[data-delete-resource]').dataset.deleteResource));
-  if(e.target.closest('#searchButton'))toast('Search will span tasks and research notes.');
+  if(e.target.closest('#searchButton'))openSearchModal();
+  if(e.target.closest('#previousWeek')){plannerWeekOffset-=1;renderWeekPlanner();}
+  if(e.target.closest('#nextWeek')){plannerWeekOffset+=1;renderWeekPlanner();}
 });
-document.addEventListener('change',e=>{if(e.target.matches('[data-task]')){const w=getWs(e.target.dataset.workspace);const task=w.tasks.find(t=>t.id===e.target.dataset.task);task.done=e.target.checked;saveData();renderAll();toast(task.done?'Task marked complete':'Task reopened');} if(e.target.matches('[data-plan-date]')){const {planDate,planField}=e.target.dataset;data.weekPlan[planDate] ||= {morning:'',afternoon:''};data.weekPlan[planDate][planField]=e.target.value;saveData();toast('Week plan saved');} if(e.target.matches('#imageUpload')){const file=e.target.files?.[0];if(file)uploadImageToWorkspace(file);e.target.value='';}});
-document.getElementById('quickAddForm').addEventListener('submit',e=>{e.preventDefault();const title=document.getElementById('taskName').value.trim();const workspace=document.getElementById('taskWorkspace').value;const due=document.getElementById('taskDue').value;const focus=document.getElementById('taskFocus').checked;if(!title)return;getWs(workspace).tasks.push({id:`t${Date.now()}`,title,done:false,due:due?fmtDate(due):'No date',dueDate:due||'',focus});saveData();e.target.reset();closeModal();renderAll();toast('Task added');});
+document.addEventListener('change',e=>{if(e.target.matches('[data-task]')){const w=getWs(e.target.dataset.workspace);const task=w.tasks.find(t=>t.id===e.target.dataset.task);task.done=e.target.checked;saveData();renderAll();toast(task.done?'Task marked complete':'Task reopened');} if(e.target.matches('[data-plan-date]')){const {planDate,planField}=e.target.dataset;data.weekPlan[planDate] ||= {morning:'',afternoon:''};data.weekPlan[planDate][planField]=e.target.value;saveData();toast('Week plan saved');} if(e.target.matches('#imageUpload')){const file=e.target.files?.[0];if(file)uploadImageToWorkspace(file);e.target.value='';} if(e.target.matches('#workspaceTemplate'))applyWorkspaceTemplate();});
+document.getElementById('quickAddForm').addEventListener('submit',e=>{e.preventDefault();const title=document.getElementById('taskName').value.trim();const workspace=document.getElementById('taskWorkspace').value;const due=document.getElementById('taskDue').value;const focus=document.getElementById('taskFocus').checked;if(!title)return;getWs(workspace).tasks.push({id:`t${Date.now()}`,title,done:false,due:due?fmtDate(due):'No date',dueDate:due||'',focus,priority:document.getElementById('taskPriority').value,tags:parseTags(document.getElementById('taskTags').value),description:'',subtasks:[]});saveData();e.target.reset();closeModal();renderAll();toast('Task added');});
 document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal();});
 document.getElementById('workspaceModalBackdrop').addEventListener('click',e=>{if(e.target.id==='workspaceModalBackdrop')closeWorkspaceModal();});
 document.getElementById('workspaceForm').addEventListener('submit',e=>{e.preventDefault();createWorkspaceFromForm();});
@@ -304,5 +386,9 @@ document.getElementById('dateModalBackdrop').addEventListener('click',e=>{if(e.t
 document.getElementById('dateForm').addEventListener('submit',e=>{e.preventDefault();saveDate();});
 document.getElementById('resourceModalBackdrop').addEventListener('click',e=>{if(e.target.id==='resourceModalBackdrop')closeResourceModal();});
 document.getElementById('resourceForm').addEventListener('submit',e=>{e.preventDefault();saveResource();});
+document.getElementById('taskEditorBackdrop').addEventListener('click',e=>{if(e.target.id==='taskEditorBackdrop')closeTaskEditor();});
+document.getElementById('taskEditorForm').addEventListener('submit',e=>{e.preventDefault();saveTaskEditor();});
+document.getElementById('searchModalBackdrop').addEventListener('click',e=>{if(e.target.id==='searchModalBackdrop')closeSearchModal();});
+document.getElementById('searchInput').addEventListener('input',e=>renderSearchResults(e.target.value));
 renderAll();
 initializeCloud();

@@ -47,7 +47,7 @@
               <h1>Good morning, Alex.</h1>
               <p class="subheading">A clear view of the work that needs you today.</p>
             </div>
-            <div class="heading-side"><section class="overview-week" aria-labelledby="weekPlannerTitle"><div class="week-mini-heading"><p class="eyebrow" id="weekPlannerTitle">THIS WEEK</p></div><div id="weekPlanner"></div></section><div class="date-tile"><span>MON</span><strong>27</strong><small>JUL</small></div></div>
+            <div class="heading-side"><section class="overview-week" aria-labelledby="weekPlannerTitle"><div class="week-mini-heading"><p class="eyebrow" id="weekPlannerTitle">THIS WEEK</p><div class="week-controls"><button id="previousWeek" aria-label="Previous week">‹</button><span id="weekRange"></span><button id="nextWeek" aria-label="Next week">›</button></div></div><div id="weekPlanner"></div></section><div class="date-tile"><span id="todayWeekday">MON</span><strong id="todayDate">27</strong><small id="todayMonth">JUL</small></div></div>
           </div>
 
           <div class="today-grid">
@@ -66,6 +66,8 @@
             <div class="section-heading"><div><p class="eyebrow">ACTIVE WORK</p><h2 id="activeWorkspaceTitle">Your active workspaces</h2></div><button class="small-link" data-view="workspaces">See all →</button></div>
             <div class="workspace-grid" id="workspaceGrid"></div>
           </section>
+
+          <section class="panel reminders-panel" id="remindersPanel"><div class="panel-heading"><div><p class="eyebrow">REMINDERS</p><h2>What needs attention soon</h2></div></div><div id="reminderList" class="reminder-list"></div></section>
 
           <section class="insight-row">
             <article class="insight-card alert-card"><span class="insight-icon">!</span><div><p class="eyebrow">NEEDS ATTENTION</p><h3 id="attentionTitle">No workspace needs attention</h3><p id="attentionText">You are in a good place.</p></div></article>
@@ -107,6 +109,23 @@
       </section>
     </div>
 
+    <div class="modal-backdrop" id="taskEditorBackdrop" hidden>
+      <section class="modal task-editor-modal" role="dialog" aria-modal="true" aria-labelledby="taskEditorTitle">
+        <button class="close-modal" id="closeTaskEditor" aria-label="Close">×</button>
+        <p class="eyebrow">TASK DETAILS</p><h2 id="taskEditorTitle">Edit task</h2>
+        <form id="taskEditorForm"><label>Task<input id="editTaskTitle" required maxlength="140" /></label><label>Due date<input id="editTaskDue" type="date" /></label><label>Priority<select id="editTaskPriority"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label>Tags<input id="editTaskTags" maxlength="160" placeholder="Separate tags with commas" /></label><label>Description<textarea id="editTaskDescription" maxlength="1000" placeholder="Context, links, or a useful definition of done"></textarea></label><label>Subtasks <span class="field-hint">one per line</span><textarea id="editTaskSubtasks" maxlength="2000" placeholder="Prepare figure&#10;Send to supervisor"></textarea></label><label class="checkbox-label"><input id="editTaskFocus" type="checkbox" /> Add to today’s focus</label><button class="submit-button" type="submit">Save task</button></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="searchModalBackdrop" hidden>
+      <section class="modal search-modal" role="dialog" aria-modal="true" aria-labelledby="searchModalTitle">
+        <button class="close-modal" id="closeSearchModal" aria-label="Close">×</button>
+        <p class="eyebrow">GLOBAL SEARCH</p><h2 id="searchModalTitle">Find your work</h2>
+        <input class="search-input" id="searchInput" placeholder="Search projects, tasks, notes, tags…" autocomplete="off" />
+        <div class="search-results" id="searchResults"><p class="portfolio-empty">Start typing to search everything.</p></div>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="dateModalBackdrop" hidden>
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="dateModalTitle">
         <button class="close-modal" id="closeDateModal" aria-label="Close">×</button>
@@ -127,7 +146,7 @@
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceModalTitle">
         <button class="close-modal" id="closeWorkspaceModal" aria-label="Close">×</button>
         <p class="eyebrow">NEW WORKSPACE</p><h2 id="workspaceModalTitle">Start a project or course</h2>
-        <form id="workspaceForm"><label>Name<input id="workspaceName" required maxlength="80" placeholder="e.g. Thesis literature review" /></label><label>Type<select id="workspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>What is it for?<input id="workspaceGoal" maxlength="160" placeholder="A concise objective" /></label><label>First deadline <input id="workspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Create workspace</button></form>
+        <form id="workspaceForm"><label>Start from<select id="workspaceTemplate"><option value="custom">Blank workspace</option><option value="literature">Literature review</option><option value="experiment">Experiment / fieldwork</option><option value="manuscript">Manuscript</option><option value="course">Course study plan</option></select></label><label>Name<input id="workspaceName" required maxlength="80" placeholder="e.g. Thesis literature review" /></label><label>Type<select id="workspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>What is it for?<input id="workspaceGoal" maxlength="160" placeholder="A concise objective" /></label><label>First deadline <input id="workspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Create workspace</button></form>
       </section>
     </div>
 
@@ -135,7 +154,7 @@
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <button class="close-modal" id="closeModal" aria-label="Close">×</button>
         <p class="eyebrow" id="modalKicker">QUICK CAPTURE</p><h2 id="modalTitle">Add a task</h2>
-        <form id="quickAddForm"><label>Task<input id="taskName" required placeholder="What needs doing?" /></label><label>Workspace<select id="taskWorkspace"></select></label><label>Due date <input id="taskDue" type="date" /></label><label class="checkbox-label"><input id="taskFocus" type="checkbox" /> Add to today's focus</label><button class="submit-button" type="submit">Add task</button></form>
+        <form id="quickAddForm"><label>Task<input id="taskName" required placeholder="What needs doing?" /></label><label>Workspace<select id="taskWorkspace"></select></label><label>Due date <input id="taskDue" type="date" /></label><label>Priority<select id="taskPriority"><option value="medium">Medium</option><option value="high">High</option><option value="low">Low</option></select></label><label>Tags<input id="taskTags" maxlength="160" placeholder="Separate tags with commas" /></label><label class="checkbox-label"><input id="taskFocus" type="checkbox" /> Add to today's focus</label><button class="submit-button" type="submit">Add task</button></form>
       </section>
     </div>
     <input id="imageUpload" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
