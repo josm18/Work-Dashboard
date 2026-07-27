@@ -1,4 +1,5 @@
 const initialData = {
+  theme: 'light',
   weekPlan: {
     '2026-07-27': {morning:'urban', afternoon:'stats'},
     '2026-07-28': {morning:'river', afternoon:'writing'},
@@ -31,6 +32,7 @@ let cloudSaveTimer = null;
 
 function normalizeData(candidate){
   const saved = candidate && Array.isArray(candidate.workspaces) ? candidate : structuredClone(initialData);
+  if(!['light','dark'].includes(saved.theme)) saved.theme='light';
   saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; (workspace.tasks||[]).forEach(task=>{ if(!task.priority)task.priority='medium'; if(!Array.isArray(task.tags))task.tags=[]; if(!Array.isArray(task.subtasks))task.subtasks=[]; if(!task.description)task.description=''; }); });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
@@ -222,7 +224,8 @@ function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById(
 }
 function noteCard(n){return `<article class="note-card ${n.id===activeNoteId?'active':''}" data-open-note="${n.id}"><p class="note-date">${escapeHtml(n.date)}</p><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.body)}</p><button data-open-note="${n.id}">Open note →</button></article>`;}
 function escapeHtml(str=''){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function renderAll(){ renderSidebar();renderHome();renderPortfolio();if(currentView==='detail')renderDetail(); }
+function applyTheme(){ const dark=data.theme==='dark'; document.body.classList.toggle('dark-theme',dark); const toggle=document.getElementById('themeToggle'); toggle.textContent=dark?'☀':'☾'; toggle.setAttribute('aria-label',dark?'Enable light mode':'Enable dark mode'); toggle.title=dark?'Enable light mode':'Enable dark mode'; }
+function renderAll(){ applyTheme();renderSidebar();renderHome();renderPortfolio();if(currentView==='detail')renderDetail(); }
 
 function openView(view){ currentView=view; document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===`${view}View`)); document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); document.getElementById('breadcrumb').innerHTML=view==='detail'?`<span>Workspaces / ${escapeHtml(getWs().name)}</span>`:`<span>Monday, 27 July</span>`; document.getElementById('sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'}); renderAll(); }
 function openWorkspace(id){activeWorkspace=id;activeTab='overview';currentView='detail';openView('detail');}
@@ -345,6 +348,7 @@ document.addEventListener('click',e=>{
   const noteLink=e.target.closest('[data-open-note]'); if(noteLink){activeNoteId=noteLink.dataset.openNote;renderDetail();return;}
   if(e.target.closest('#profileButton')||e.target.closest('#googleSignIn')){connectGoogle();return;}
   if(e.target.closest('#signOutButton')){signOut();return;}
+  if(e.target.closest('#themeToggle')){data.theme=data.theme==='dark'?'light':'dark';saveData();applyTheme();toast(`${data.theme==='dark'?'Dark':'Light'} mode enabled`);return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#addFocus'))openModal();
   if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))openWorkspaceModal();
