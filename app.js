@@ -48,8 +48,9 @@ function setAppAccess(granted, message=''){
 }
 function setSyncStatus(label, color='#70a46f'){ const status=document.getElementById('syncStatus'); if(!status)return; status.querySelector('span:last-child').textContent=label; status.querySelector('.status-dot').style.background=color; }
 function updateProfile(){
-  const name=document.getElementById('profileName'); const initial=document.getElementById('profileInitial');
-  if(cloudUser){ const display=cloudUser.user_metadata?.full_name || cloudUser.email || 'Signed in'; name.textContent=display; initial.textContent=display.trim().charAt(0).toUpperCase(); return; }
+  const name=document.getElementById('profileName'); const initial=document.getElementById('profileInitial'); const signOut=document.getElementById('signOutButton');
+  if(cloudUser){ const display=cloudUser.user_metadata?.full_name || cloudUser.email || 'Signed in'; name.textContent=display; initial.textContent=display.trim().charAt(0).toUpperCase(); signOut.hidden=false; return; }
+  signOut.hidden=true;
   name.textContent=hasCloudConfig()?'Sign in with Google':'Connect cloud'; initial.textContent='A';
 }
 function queueCloudSave(){ clearTimeout(cloudSaveTimer); setSyncStatus('Saving securely…','#c18d38'); cloudSaveTimer=setTimeout(syncCloudState,700); }
@@ -91,6 +92,13 @@ async function connectGoogle(){
   document.getElementById('authStatus').textContent='Redirecting to Google…';
   const { error }=await supabaseClient.auth.signInWithOAuth({provider:'google',options:{redirectTo:window.location.origin+window.location.pathname}});
   if(error){ console.error('Google sign-in failed:',error); document.getElementById('authStatus').textContent='Google sign-in could not start. Please try again.'; }
+}
+async function signOut(){
+  if(!supabaseClient || !cloudUser)return;
+  setSyncStatus('Signing out…','#c18d38');
+  const { error }=await supabaseClient.auth.signOut();
+  if(error){ console.error('Sign-out failed:',error); setSyncStatus('Could not sign out','#b6604f'); toast('Sign out did not complete. Please try again.'); return; }
+  cloudUser=null; cloudEnabled=false; updateProfile(); setSyncStatus('Signed out','#8b958b'); setAppAccess(false);
 }
 async function uploadResearchImage(file){
   if(!cloudEnabled || !cloudUser) throw new Error('Sign in before uploading research images.');
@@ -163,6 +171,7 @@ document.addEventListener('click',e=>{
   const filter=e.target.closest('[data-filter]'); if(filter){workspaceFilter=filter.dataset.filter;document.querySelectorAll('.filter').forEach(b=>b.classList.toggle('active',b===filter));renderPortfolio();return;}
   const tab=e.target.closest('[data-tab]'); if(tab){activeTab=tab.dataset.tab;renderDetail();return;}
   if(e.target.closest('#profileButton')||e.target.closest('#googleSignIn')){connectGoogle();return;}
+  if(e.target.closest('#signOutButton')){signOut();return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#addFocus'))openModal();
   if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))toast('New workspace creation comes in the cloud-connected version.');
