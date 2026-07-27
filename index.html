@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <div class="app-shell">
+    <div class="app-shell locked" id="appShell">
       <aside class="sidebar" id="sidebar">
         <a class="brand" href="#home" aria-label="Fieldwork home">
           <span class="brand-mark">F</span><span>fieldwork</span>
@@ -92,6 +92,17 @@
         </section>
       </main>
     </div>
+
+    <section class="auth-gate" id="authGate" hidden aria-labelledby="authTitle">
+      <div class="auth-card">
+        <a class="brand auth-brand" href="#" aria-label="Fieldwork"><span class="brand-mark">F</span><span>fieldwork</span></a>
+        <p class="eyebrow">PRIVATE RESEARCH DESK</p>
+        <h1 id="authTitle">Your work, kept together.</h1>
+        <p>Sign in to view your projects, research notes, deadlines, and weekly plan.</p>
+        <button class="google-button" id="googleSignIn"><span class="google-g">G</span>Continue with Google</button>
+        <p class="auth-status" id="authStatus">Your dashboard is private to your account.</p>
+      </div>
+    </section>
 
     <div class="modal-backdrop" id="modalBackdrop" hidden>
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">

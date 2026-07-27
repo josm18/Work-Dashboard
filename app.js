@@ -41,6 +41,11 @@ function loadData(){
 function saveData(){ localStorage.setItem('fieldwork-data', JSON.stringify(data)); if(cloudEnabled) queueCloudSave(); }
 function cloudConfig(){ return window.FIELDWORK_SUPABASE || {}; }
 function hasCloudConfig(){ const config=cloudConfig(); return Boolean(config.url && config.publishableKey); }
+function setAppAccess(granted, message=''){
+  document.getElementById('appShell').classList.toggle('locked',!granted);
+  document.getElementById('authGate').hidden=granted;
+  if(message) document.getElementById('authStatus').textContent=message;
+}
 function setSyncStatus(label, color='#70a46f'){ const status=document.getElementById('syncStatus'); if(!status)return; status.querySelector('span:last-child').textContent=label; status.querySelector('.status-dot').style.background=color; }
 function updateProfile(){
   const name=document.getElementById('profileName'); const initial=document.getElementById('profileInitial');
@@ -57,31 +62,35 @@ async function syncCloudState(){
 async function loadCloudState(user){
   cloudUser=user; updateProfile(); setSyncStatus('Loading your dashboard…','#c18d38');
   const { data:row, error }=await supabaseClient.from('dashboard_state').select('data').eq('user_id',user.id).maybeSingle();
-  if(error && error.code!=='PGRST116'){ console.error('Cloud load failed:',error); setSyncStatus('Cloud setup incomplete','#b6604f'); return; }
+  if(error && error.code!=='PGRST116'){ console.error('Cloud load failed:',error); setSyncStatus('Cloud setup incomplete','#b6604f'); setAppAccess(false,'We could not load this private dashboard. Please try again.'); return; }
   cloudEnabled=true;
   if(row?.data){ data=normalizeData(row.data); localStorage.setItem('fieldwork-data',JSON.stringify(data)); renderAll(); setSyncStatus('Synced securely','#70a46f'); }
   else { await syncCloudState(); }
+  setAppAccess(true);
 }
 async function initializeCloud(){
   updateProfile();
-  if(!hasCloudConfig()){ setSyncStatus('Local preview','#8b958b'); return; }
-  if(!window.supabase?.createClient){ setSyncStatus('Cloud library unavailable','#b6604f'); return; }
+  if(!hasCloudConfig()){ setSyncStatus('Local preview','#8b958b'); setAppAccess(true); return; }
+  setAppAccess(false,'Checking your secure session…');
+  if(!window.supabase?.createClient){ setSyncStatus('Cloud library unavailable','#b6604f'); setAppAccess(false,'The sign-in service is unavailable. Please refresh and try again.'); return; }
   const config=cloudConfig(); supabaseClient=window.supabase.createClient(config.url,config.publishableKey);
   setSyncStatus('Sign in to sync','#c18d38');
   const { data:{session}, error }=await supabaseClient.auth.getSession();
-  if(error){ console.error('Session check failed:',error); setSyncStatus('Sign-in unavailable','#b6604f'); return; }
+  if(error){ console.error('Session check failed:',error); setSyncStatus('Sign-in unavailable','#b6604f'); setAppAccess(false,'Sign-in is unavailable. Please refresh and try again.'); return; }
   if(session?.user) await loadCloudState(session.user);
+  else setAppAccess(false);
   supabaseClient.auth.onAuthStateChange(async(event,sessionState)=>{
     if(event==='SIGNED_IN' && sessionState?.user && sessionState.user.id!==cloudUser?.id) await loadCloudState(sessionState.user);
-    if(event==='SIGNED_OUT'){ cloudUser=null; cloudEnabled=false; updateProfile(); setSyncStatus('Signed out — local preview','#8b958b'); }
+    if(event==='SIGNED_OUT'){ cloudUser=null; cloudEnabled=false; updateProfile(); setSyncStatus('Signed out','#8b958b'); setAppAccess(false); }
   });
 }
 async function connectGoogle(){
   if(!hasCloudConfig()){ toast('Add your Supabase URL and publishable key first.'); return; }
   if(!supabaseClient){ await initializeCloud(); }
   if(cloudUser){ toast(`Connected as ${cloudUser.email || 'your Google account'}`); return; }
+  document.getElementById('authStatus').textContent='Redirecting to Google…';
   const { error }=await supabaseClient.auth.signInWithOAuth({provider:'google',options:{redirectTo:window.location.origin+window.location.pathname}});
-  if(error){ console.error('Google sign-in failed:',error); toast('Google sign-in could not start. Check CLOUD_SETUP.md.'); }
+  if(error){ console.error('Google sign-in failed:',error); document.getElementById('authStatus').textContent='Google sign-in could not start. Please try again.'; }
 }
 async function uploadResearchImage(file){
   if(!cloudEnabled || !cloudUser) throw new Error('Sign in before uploading research images.');
@@ -153,7 +162,7 @@ document.addEventListener('click',e=>{
   const view=e.target.closest('[data-view]'); if(view){openView(view.dataset.view);return;}
   const filter=e.target.closest('[data-filter]'); if(filter){workspaceFilter=filter.dataset.filter;document.querySelectorAll('.filter').forEach(b=>b.classList.toggle('active',b===filter));renderPortfolio();return;}
   const tab=e.target.closest('[data-tab]'); if(tab){activeTab=tab.dataset.tab;renderDetail();return;}
-  if(e.target.closest('#profileButton')){connectGoogle();return;}
+  if(e.target.closest('#profileButton')||e.target.closest('#googleSignIn')){connectGoogle();return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#addFocus'))openModal();
   if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))toast('New workspace creation comes in the cloud-connected version.');
