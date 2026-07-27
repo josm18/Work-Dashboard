@@ -28,7 +28,7 @@ let cloudSaveTimer = null;
 
 function normalizeData(candidate){
   const saved = candidate && Array.isArray(candidate.workspaces) ? candidate : structuredClone(initialData);
-  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; });
+  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
   return saved;
@@ -108,6 +108,32 @@ async function uploadResearchImage(file){
   if(error) throw error;
   return path;
 }
+async function uploadImageToWorkspace(file){
+  if(!cloudEnabled || !cloudUser){ toast('Sign in to upload private research images.'); return; }
+  const workspace=getWs(); if(!workspace)return;
+  try {
+    toast('Uploading image…');
+    const path=await uploadResearchImage(file);
+    workspace.images.unshift({id:crypto.randomUUID(),path,name:file.name,uploadedAt:new Date().toISOString()});
+    saveData(); renderDetail(); toast('Image uploaded privately');
+  } catch(error) { console.error('Image upload failed:',error); toast(error.message || 'Image upload failed.'); }
+}
+async function hydrateResearchImages(workspace){
+  const gallery=document.getElementById('imageGallery'); if(!gallery || getWs()?.id!==workspace.id)return;
+  if(!workspace.images?.length){ gallery.innerHTML='<p class="image-empty">No images attached to this workspace yet.</p>'; return; }
+  if(!cloudEnabled || !supabaseClient){ gallery.innerHTML='<p class="image-empty">Sign in to load private research images.</p>'; return; }
+  gallery.innerHTML='<p class="image-empty">Loading private images…</p>';
+  const signed=await Promise.all(workspace.images.map(async image=>{ const {data:result,error}=await supabaseClient.storage.from('project-images').createSignedUrl(image.path,3600); return {image,url:error?null:result?.signedUrl}; }));
+  if(getWs()?.id!==workspace.id || activeTab!=='notes')return;
+  gallery.innerHTML=signed.map(({image,url})=>url?`<figure class="research-image"><img src="${url}" alt="${escapeHtml(image.name)}"/><button class="delete-image" data-delete-image="${image.id}" aria-label="Delete ${escapeHtml(image.name)}">×</button><figcaption>${escapeHtml(image.name)}</figcaption></figure>`:'<p class="image-empty">An image could not be loaded.</p>').join('');
+}
+async function deleteResearchImage(imageId){
+  const workspace=getWs(); const image=workspace?.images?.find(item=>item.id===imageId); if(!workspace || !image)return;
+  if(!window.confirm(`Delete “${image.name}” from this workspace?`))return;
+  const {error}=await supabaseClient.storage.from('project-images').remove([image.path]);
+  if(error){ console.error('Image delete failed:',error); toast('Image could not be deleted.'); return; }
+  workspace.images=workspace.images.filter(item=>item.id!==imageId); saveData(); renderDetail(); toast('Image deleted');
+}
 function getWs(id=activeWorkspace){ return data.workspaces.find(w=>w.id===id); }
 function activeWorkspaces(){ return data.workspaces.filter(w=>w.status!=='completed'); }
 function allTasks(){ return activeWorkspaces().flatMap(w=>w.tasks.map(t=>({...t, workspace:w}))); }
@@ -148,12 +174,13 @@ function renderWeekPlanner(){
 }
 function renderCalendar(){ renderWeekPlanner(); const dates=activeWorkspaces().flatMap(w=>w.dates.map(d=>({...d,workspace:w}))).sort((a,b)=>a.date.localeCompare(b.date)); document.getElementById('calendarList').innerHTML=dates.map(d=>`<article class="calendar-event" style="--accent:${d.workspace.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.workspace.name)} · ${escapeHtml(d.type)}</p></div></article>`).join(''); }
 function heroHtml(w){const status=w.status==='completed'?`Completed ${fmtDate(w.completedAt)}`:w.health;return `<p class="project-kind">${w.kind.toUpperCase()} · ${escapeHtml(w.phase)}</p><div class="project-title-line"><h1>${escapeHtml(w.name)}</h1><span class="health" style="${healthStyle(w)}">${status}</span></div><p>${escapeHtml(w.goal)}</p><div class="hero-meta"><span class="meta-chip">${progress(w)}% task progress</span>${w.status==='completed'?`<span class="meta-chip">Archived ${fmtDate(w.completedAt)}</span>`:w.deadline?`<span class="meta-chip">Next deadline ${fmtDate(w.deadline)}</span>`:''}<span class="meta-chip">${escapeHtml(w.collaborators)}</span></div>`;}
-function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById('projectHero').innerHTML=heroHtml(w); document.getElementById('detailActions').innerHTML=`<button class="archive-button ${w.status==='completed'?'restore-button':''}" id="toggleWorkspaceStatus">${w.status==='completed'?'Restore to active':'Mark as complete'}</button>`; document.querySelectorAll('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab)); let content='';
+function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById('projectHero').innerHTML=heroHtml(w); document.getElementById('detailActions').innerHTML=`<button class="archive-button ${w.status==='completed'?'restore-button':''}" id="toggleWorkspaceStatus">${w.status==='completed'?'Restore to active':'Mark as complete'}</button><button class="archive-button delete-workspace-button" id="deleteWorkspaceButton">Delete workspace</button>`; document.querySelectorAll('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab)); let content='';
   if(activeTab==='overview') content=`<div class="detail-layout"><div><section class="detail-section"><p class="eyebrow">WHAT'S NEXT</p><h2>Tasks</h2><div class="task-list">${w.tasks.map(t=>taskHtml(t,w)).join('')}</div><button class="add-inline" data-add-task="${w.id}">+ Add task</button></section><section class="detail-section"><p class="eyebrow">RECENT NOTES</p><h2>Research trail</h2><div class="note-list">${w.notes.slice(0,2).map(n=>noteCard(n)).join('')}</div></section></div><aside class="detail-side"><section class="panel"><p class="eyebrow">CURRENT PHASE</p><h3>${escapeHtml(w.phase)}</h3><p>Your task progress is ${progress(w)}%. Keep the next action specific and small.</p></section><section class="panel"><p class="eyebrow">AT A GLANCE</p><h3>${w.tasks.filter(t=>!t.done).length} open tasks</h3><p>${w.deadline?`Next deadline is ${fmtDate(w.deadline)}.`:'There is no scheduled deadline.'}</p></section></aside></div>`;
-  if(activeTab==='notes') content=`<div class="notes-layout"><div class="note-toolbar"><div><p class="eyebrow">LIVING NOTE</p><h2>Working notes</h2></div><button id="saveNote">Save changes</button></div><div class="note-editor" id="noteEditor" contenteditable="true" data-placeholder="Start writing a research note…">${w.notes[0]?escapeHtml(w.notes[0].body):''}</div><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`;
+  if(activeTab==='notes') content=`<div class="notes-layout"><div class="note-toolbar"><div><p class="eyebrow">LIVING NOTE</p><h2>Working notes</h2></div><button id="saveNote">Save changes</button></div><div class="note-editor" id="noteEditor" contenteditable="true" data-placeholder="Start writing a research note…">${w.notes[0]?escapeHtml(w.notes[0].body):''}</div><section class="image-section"><div class="image-section-heading"><p class="eyebrow">RESEARCH IMAGES</p><button class="upload-image-button" id="uploadImageButton">+ Upload image</button></div><div class="image-gallery" id="imageGallery"></div></section><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`;
   if(activeTab==='timeline') content=`<div class="timeline-detail">${w.dates.length?w.dates.sort((a,b)=>a.date.localeCompare(b.date)).map(d=>`<article class="calendar-event" style="--accent:${w.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.type)} · ${escapeHtml(w.name)}</p></div></article>`).join(''):'<p class="portfolio-empty">No milestones or deadlines recorded yet.</p>'}<button class="add-inline" id="addDate">+ Add key date</button></div>`;
   if(activeTab==='resources') content=`<div class="resources-list"><p class="eyebrow">LINKED MATERIAL</p><h2 style="font-family:var(--serif);font-weight:500;font-size:29px;margin:0 0 13px">Resources</h2>${w.resources.map(r=>`<div class="resource-item"><span class="resource-icon">↗</span><div><a href="${r.url}" target="_blank" rel="noreferrer">${escapeHtml(r.title)}</a><p>${escapeHtml(r.meta)}</p></div></div>`).join('')}<button class="add-inline" id="addResource">+ Add link</button></div>`;
   document.getElementById('detailBody').innerHTML=content;
+  if(activeTab==='notes') hydrateResearchImages(w);
 }
 function noteCard(n){return `<article class="note-card"><p class="note-date">${escapeHtml(n.date)}</p><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.body)}</p></article>`;}
 function escapeHtml(str=''){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
@@ -164,6 +191,28 @@ function openWorkspace(id){activeWorkspace=id;activeTab='overview';currentView='
 function toast(message){const el=document.getElementById('toast');el.textContent=message;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2200);}
 function openModal(workspace='urban'){document.getElementById('taskWorkspace').value=workspace;document.getElementById('modalBackdrop').hidden=false;setTimeout(()=>document.getElementById('taskName').focus(),10);}
 function closeModal(){document.getElementById('modalBackdrop').hidden=true;}
+function openWorkspaceModal(){ document.getElementById('workspaceModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('workspaceName').focus(),10); }
+function closeWorkspaceModal(){ document.getElementById('workspaceModalBackdrop').hidden=true; }
+function workspaceId(name){ return `${name.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,'') || 'workspace'}-${Date.now().toString(36)}`; }
+function createWorkspaceFromForm(){
+  const name=document.getElementById('workspaceName').value.trim(); const kind=document.getElementById('workspaceKind').value; const goal=document.getElementById('workspaceGoal').value.trim(); const deadline=document.getElementById('workspaceDeadline').value;
+  if(!name)return;
+  const palette=[['#799b7c','#406044'],['#7697aa','#416576'],['#a78db3','#675476'],['#b6926f','#76583f'],['#c39750','#805a1a'],['#7e9c91','#41675c']]; const [accent,accentInk]=palette[data.workspaces.length%palette.length]; const id=workspaceId(name);
+  const workspace={id,name,kind,status:'active',accent,accentInk,health:'On track',healthTone:'green',goal:goal||`A new ${kind==='course'?'course':'research project'} workspace.`,deadline,phase:kind==='course'?'Getting started':'Planning',collaborators:kind==='course'?'Coursework':'You',tasks:[],notes:[{id:`note-${Date.now()}`,title:'Start here',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:'Capture your first ideas, decisions, or next steps here.'}],images:[],resources:[],dates:deadline?[{date:deadline,title:'First deadline',type:kind==='course'?'Assignment':'Deadline'}]:[]};
+  data.workspaces.push(workspace); saveData(); document.getElementById('workspaceForm').reset(); closeWorkspaceModal(); openWorkspace(id); toast(`${name} created`);
+}
+async function deleteCurrentWorkspace(){
+  const workspace=getWs(); if(!workspace)return;
+  const confirmation=window.prompt(`This permanently deletes “${workspace.name}”, including its notes, tasks, deadlines, and ${workspace.images?.length||0} private image(s).\n\nType the workspace name to confirm:`);
+  if(confirmation!==workspace.name){ toast('Workspace deletion cancelled'); return; }
+  if(workspace.images?.length){
+    const {error}=await supabaseClient.storage.from('project-images').remove(workspace.images.map(image=>image.path));
+    if(error){ console.error('Workspace image deletion failed:',error); toast('Workspace was kept because its images could not be deleted.'); return; }
+  }
+  data.workspaces=data.workspaces.filter(item=>item.id!==workspace.id);
+  activeWorkspace=activeWorkspaces()[0]?.id || data.workspaces[0]?.id || null;
+  saveData(); openView('workspaces'); toast(`${workspace.name} permanently deleted`);
+}
 
 document.addEventListener('click',e=>{
   const open=e.target.closest('[data-open-workspace]'); if(open){openWorkspace(open.dataset.openWorkspace);return;}
@@ -174,19 +223,25 @@ document.addEventListener('click',e=>{
   if(e.target.closest('#signOutButton')){signOut();return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#addFocus'))openModal();
-  if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))toast('New workspace creation comes in the cloud-connected version.');
+  if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))openWorkspaceModal();
   if(e.target.closest('#toggleWorkspaceStatus')){const w=getWs(); if(w.status==='completed'){w.status='active';delete w.completedAt;toast(`${w.name} restored to active work`);}else{w.status='completed';w.completedAt=new Date().toISOString().slice(0,10);toast(`${w.name} moved to completed work`);}saveData();renderAll();}
+  if(e.target.closest('#deleteWorkspaceButton'))deleteCurrentWorkspace();
   if(e.target.closest('#closeModal'))closeModal();
+  if(e.target.closest('#closeWorkspaceModal'))closeWorkspaceModal();
   if(e.target.closest('#menuButton'))document.getElementById('sidebar').classList.toggle('open');
   if(e.target.closest('[data-add-task]'))openModal(e.target.closest('[data-add-task]').dataset.addTask);
   if(e.target.closest('#newNote')){const w=getWs();w.notes.unshift({id:`n${Date.now()}`,title:'Untitled note',date:'27 JUL 2026',body:'Start documenting your work here.'});saveData();renderDetail();toast('New note page created');}
   if(e.target.closest('#saveNote')){const w=getWs();if(!w.notes.length)w.notes.unshift({id:`n${Date.now()}`,title:'Working notes',date:'27 JUL 2026',body:''});w.notes[0].body=document.getElementById('noteEditor').innerText.trim();w.notes[0].date='27 JUL 2026';saveData();toast('Note saved on this device');}
+  if(e.target.closest('#uploadImageButton'))document.getElementById('imageUpload').click();
+  if(e.target.closest('[data-delete-image]'))deleteResearchImage(e.target.closest('[data-delete-image]').dataset.deleteImage);
   if(e.target.closest('#addDate'))toast('Key-date editing is ready for the cloud data layer.');
   if(e.target.closest('#addResource'))toast('Link editing is ready for the cloud data layer.');
   if(e.target.closest('#searchButton'))toast('Search will span tasks and research notes.');
 });
-document.addEventListener('change',e=>{if(e.target.matches('[data-task]')){const w=getWs(e.target.dataset.workspace);const task=w.tasks.find(t=>t.id===e.target.dataset.task);task.done=e.target.checked;saveData();renderAll();toast(task.done?'Task marked complete':'Task reopened');} if(e.target.matches('[data-plan-date]')){const {planDate,planField}=e.target.dataset;data.weekPlan[planDate] ||= {morning:'',afternoon:''};data.weekPlan[planDate][planField]=e.target.value;saveData();toast('Week plan saved');}});
+document.addEventListener('change',e=>{if(e.target.matches('[data-task]')){const w=getWs(e.target.dataset.workspace);const task=w.tasks.find(t=>t.id===e.target.dataset.task);task.done=e.target.checked;saveData();renderAll();toast(task.done?'Task marked complete':'Task reopened');} if(e.target.matches('[data-plan-date]')){const {planDate,planField}=e.target.dataset;data.weekPlan[planDate] ||= {morning:'',afternoon:''};data.weekPlan[planDate][planField]=e.target.value;saveData();toast('Week plan saved');} if(e.target.matches('#imageUpload')){const file=e.target.files?.[0];if(file)uploadImageToWorkspace(file);e.target.value='';}});
 document.getElementById('quickAddForm').addEventListener('submit',e=>{e.preventDefault();const title=document.getElementById('taskName').value.trim();const workspace=document.getElementById('taskWorkspace').value;const due=document.getElementById('taskDue').value;const focus=document.getElementById('taskFocus').checked;if(!title)return;getWs(workspace).tasks.push({id:`t${Date.now()}`,title,done:false,due:due?fmtDate(due):'No date',focus});saveData();e.target.reset();closeModal();renderAll();toast('Task added');});
 document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal();});
+document.getElementById('workspaceModalBackdrop').addEventListener('click',e=>{if(e.target.id==='workspaceModalBackdrop')closeWorkspaceModal();});
+document.getElementById('workspaceForm').addEventListener('submit',e=>{e.preventDefault();createWorkspaceFromForm();});
 renderAll();
 initializeCloud();

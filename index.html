@@ -105,6 +105,14 @@
       </div>
     </section>
 
+    <div class="modal-backdrop" id="workspaceModalBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceModalTitle">
+        <button class="close-modal" id="closeWorkspaceModal" aria-label="Close">×</button>
+        <p class="eyebrow">NEW WORKSPACE</p><h2 id="workspaceModalTitle">Start a project or course</h2>
+        <form id="workspaceForm"><label>Name<input id="workspaceName" required maxlength="80" placeholder="e.g. Thesis literature review" /></label><label>Type<select id="workspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>What is it for?<input id="workspaceGoal" maxlength="160" placeholder="A concise objective" /></label><label>First deadline <input id="workspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Create workspace</button></form>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="modalBackdrop" hidden>
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
         <button class="close-modal" id="closeModal" aria-label="Close">×</button>
@@ -112,6 +120,7 @@
         <form id="quickAddForm"><label>Task<input id="taskName" required placeholder="What needs doing?" /></label><label>Workspace<select id="taskWorkspace"></select></label><label>Due date <input id="taskDue" type="date" /></label><label class="checkbox-label"><input id="taskFocus" type="checkbox" /> Add to today's focus</label><button class="submit-button" type="submit">Add task</button></form>
       </section>
     </div>
+    <input id="imageUpload" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
     <div class="toast" id="toast" role="status"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-config.js"></script>
