@@ -163,7 +163,7 @@ function parseTags(value=''){ return [...new Set(value.split(',').map(tag=>tag.t
 function localDateKey(date){ const year=date.getFullYear(); const month=String(date.getMonth()+1).padStart(2,'0'); const day=String(date.getDate()).padStart(2,'0'); return `${year}-${month}-${day}`; }
 function plannerMonday(){ const date=new Date(); date.setHours(12,0,0,0); date.setDate(date.getDate()-((date.getDay()+6)%7)+(plannerWeekOffset*7)); return date; }
 function plannerDates(){ const monday=plannerMonday(); return Array.from({length:5},(_,index)=>{ const day=new Date(monday); day.setDate(monday.getDate()+index); return {date:localDateKey(day),day}; }); }
-function healthStyle(w){ const tones={green:['var(--sage)','var(--sage-ink)'],amber:['var(--amber)','var(--amber-ink)'],gray:['#e7e8e4','#727b73'],coral:['var(--coral)','var(--coral-ink)']}; const [bg,ink]=tones[w.status==='completed'?'gray':w.healthTone]||tones.green; return `--health:${bg};--health-ink:${ink};`; }
+function healthStyle(w){ const tones={green:['var(--sage)','var(--sage-ink)'],amber:['var(--amber)','var(--amber-ink)'],gray:['var(--neutral)','var(--neutral-ink)'],coral:['var(--coral)','var(--coral-ink)']}; const [bg,ink]=tones[w.status==='completed'?'gray':w.healthTone]||tones.green; return `--health:${bg};--health-ink:${ink};`; }
 function titleCase(v){ return v[0].toUpperCase()+v.slice(1); }
 
 function renderSidebar(){
