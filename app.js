@@ -21,6 +21,7 @@ let activeWorkspace = 'urban';
 let currentView = 'home';
 let activeTab = 'overview';
 let workspaceFilter = 'all';
+let activeNoteId = null;
 let supabaseClient = null;
 let cloudUser = null;
 let cloudEnabled = false;
@@ -28,7 +29,7 @@ let cloudSaveTimer = null;
 
 function normalizeData(candidate){
   const saved = candidate && Array.isArray(candidate.workspaces) ? candidate : structuredClone(initialData);
-  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; });
+  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
   return saved;
@@ -173,16 +174,16 @@ function renderWeekPlanner(){
   document.getElementById('weekPlanner').innerHTML=dayHeader+row('morning','Morning')+row('afternoon','Afternoon');
 }
 function renderCalendar(){ renderWeekPlanner(); const dates=activeWorkspaces().flatMap(w=>w.dates.map(d=>({...d,workspace:w}))).sort((a,b)=>a.date.localeCompare(b.date)); document.getElementById('calendarList').innerHTML=dates.map(d=>`<article class="calendar-event" style="--accent:${d.workspace.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.workspace.name)} · ${escapeHtml(d.type)}</p></div></article>`).join(''); }
-function heroHtml(w){const status=w.status==='completed'?`Completed ${fmtDate(w.completedAt)}`:w.health;return `<p class="project-kind">${w.kind.toUpperCase()} · ${escapeHtml(w.phase)}</p><div class="project-title-line"><h1>${escapeHtml(w.name)}</h1><span class="health" style="${healthStyle(w)}">${status}</span></div><p>${escapeHtml(w.goal)}</p><div class="hero-meta"><span class="meta-chip">${progress(w)}% task progress</span>${w.status==='completed'?`<span class="meta-chip">Archived ${fmtDate(w.completedAt)}</span>`:w.deadline?`<span class="meta-chip">Next deadline ${fmtDate(w.deadline)}</span>`:''}<span class="meta-chip">${escapeHtml(w.collaborators)}</span></div>`;}
-function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById('projectHero').innerHTML=heroHtml(w); document.getElementById('detailActions').innerHTML=`<button class="archive-button ${w.status==='completed'?'restore-button':''}" id="toggleWorkspaceStatus">${w.status==='completed'?'Restore to active':'Mark as complete'}</button><button class="archive-button delete-workspace-button" id="deleteWorkspaceButton">Delete workspace</button>`; document.querySelectorAll('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab)); let content='';
+function heroHtml(w){const status=w.status==='completed'?`Completed ${fmtDate(w.completedAt)}`:w.health;return `<p class="project-kind">${w.kind.toUpperCase()} · ${escapeHtml(w.phase)}</p><div class="project-title-line"><h1>${escapeHtml(w.name)}</h1><span class="health" style="${healthStyle(w)}">${status}</span></div><p>${escapeHtml(w.goal)}</p><div class="hero-meta"><span class="meta-chip">${progress(w)}% task progress</span>${w.status==='completed'?`<span class="meta-chip">Archived ${fmtDate(w.completedAt)}</span>`:w.deadline?`<span class="meta-chip">Next deadline ${fmtDate(w.deadline)}</span>`:''}<span class="meta-chip">${escapeHtml(w.collaborators)}</span>${w.tags.map(tag=>`<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('')}</div>`;}
+function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById('projectHero').innerHTML=heroHtml(w); document.getElementById('detailActions').innerHTML=`<button class="archive-button edit-workspace-button" id="editWorkspaceButton">Edit workspace</button><button class="archive-button ${w.status==='completed'?'restore-button':''}" id="toggleWorkspaceStatus">${w.status==='completed'?'Restore to active':'Mark as complete'}</button><button class="archive-button delete-workspace-button" id="deleteWorkspaceButton">Delete workspace</button>`; document.querySelectorAll('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab)); let content='';
   if(activeTab==='overview') content=`<div class="detail-layout"><div><section class="detail-section"><p class="eyebrow">WHAT'S NEXT</p><h2>Tasks</h2><div class="task-list">${w.tasks.map(t=>taskHtml(t,w)).join('')}</div><button class="add-inline" data-add-task="${w.id}">+ Add task</button></section><section class="detail-section"><p class="eyebrow">RECENT NOTES</p><h2>Research trail</h2><div class="note-list">${w.notes.slice(0,2).map(n=>noteCard(n)).join('')}</div></section></div><aside class="detail-side"><section class="panel"><p class="eyebrow">CURRENT PHASE</p><h3>${escapeHtml(w.phase)}</h3><p>Your task progress is ${progress(w)}%. Keep the next action specific and small.</p></section><section class="panel"><p class="eyebrow">AT A GLANCE</p><h3>${w.tasks.filter(t=>!t.done).length} open tasks</h3><p>${w.deadline?`Next deadline is ${fmtDate(w.deadline)}.`:'There is no scheduled deadline.'}</p></section></aside></div>`;
-  if(activeTab==='notes') content=`<div class="notes-layout"><div class="note-toolbar"><div><p class="eyebrow">LIVING NOTE</p><h2>Working notes</h2></div><button id="saveNote">Save changes</button></div><div class="note-editor" id="noteEditor" contenteditable="true" data-placeholder="Start writing a research note…">${w.notes[0]?escapeHtml(w.notes[0].body):''}</div><section class="image-section"><div class="image-section-heading"><p class="eyebrow">RESEARCH IMAGES</p><button class="upload-image-button" id="uploadImageButton">+ Upload image</button></div><div class="image-gallery" id="imageGallery"></div></section><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`;
-  if(activeTab==='timeline') content=`<div class="timeline-detail">${w.dates.length?w.dates.sort((a,b)=>a.date.localeCompare(b.date)).map(d=>`<article class="calendar-event" style="--accent:${w.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.type)} · ${escapeHtml(w.name)}</p></div></article>`).join(''):'<p class="portfolio-empty">No milestones or deadlines recorded yet.</p>'}<button class="add-inline" id="addDate">+ Add key date</button></div>`;
-  if(activeTab==='resources') content=`<div class="resources-list"><p class="eyebrow">LINKED MATERIAL</p><h2 style="font-family:var(--serif);font-weight:500;font-size:29px;margin:0 0 13px">Resources</h2>${w.resources.map(r=>`<div class="resource-item"><span class="resource-icon">↗</span><div><a href="${r.url}" target="_blank" rel="noreferrer">${escapeHtml(r.title)}</a><p>${escapeHtml(r.meta)}</p></div></div>`).join('')}<button class="add-inline" id="addResource">+ Add link</button></div>`;
+  if(activeTab==='notes') { const note=w.notes.find(item=>item.id===activeNoteId) || w.notes[0]; if(note)activeNoteId=note.id; content=`<div class="notes-layout">${note?`<div class="note-toolbar"><div><p class="eyebrow">LIVING NOTE</p><input class="note-editor-title" id="noteTitle" value="${escapeHtml(note.title)}" aria-label="Note title" /></div><div class="note-actions"><button class="delete-text-button" id="deleteNote">Delete</button><button id="saveNote">Save changes</button></div></div><div class="note-editor" id="noteEditor" contenteditable="true" data-placeholder="Start writing a research note…">${escapeHtml(note.body)}</div>`:'<p class="portfolio-empty">Create a note to start documenting this workspace.</p>'}<section class="image-section"><div class="image-section-heading"><p class="eyebrow">RESEARCH IMAGES</p><button class="upload-image-button" id="uploadImageButton">+ Upload image</button></div><div class="image-gallery" id="imageGallery"></div></section><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`; }
+  if(activeTab==='timeline') content=`<div class="timeline-detail">${w.dates.length?w.dates.sort((a,b)=>a.date.localeCompare(b.date)).map((d,index)=>`<article class="calendar-event timeline-entry" style="--accent:${w.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.type)} · ${escapeHtml(w.name)}</p></div><button class="delete-row" data-delete-date="${index}">Delete</button></article>`).join(''):'<p class="portfolio-empty">No milestones or deadlines recorded yet.</p>'}<button class="add-inline" id="addDate">+ Add key date</button></div>`;
+  if(activeTab==='resources') content=`<div class="resources-list"><p class="eyebrow">LINKED MATERIAL</p><h2 style="font-family:var(--serif);font-weight:500;font-size:29px;margin:0 0 13px">Resources</h2>${w.resources.length?w.resources.map((r,index)=>`<div class="resource-item"><span class="resource-icon">↗</span><div><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.title)}</a><p>${escapeHtml(r.meta)}</p></div><button class="delete-row" data-delete-resource="${index}">Delete</button></div>`).join(''):'<p class="portfolio-empty">No resource links yet.</p>'}<button class="add-inline" id="addResource">+ Add link</button></div>`;
   document.getElementById('detailBody').innerHTML=content;
   if(activeTab==='notes') hydrateResearchImages(w);
 }
-function noteCard(n){return `<article class="note-card"><p class="note-date">${escapeHtml(n.date)}</p><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.body)}</p></article>`;}
+function noteCard(n){return `<article class="note-card ${n.id===activeNoteId?'active':''}" data-open-note="${n.id}"><p class="note-date">${escapeHtml(n.date)}</p><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.body)}</p><button data-open-note="${n.id}">Open note →</button></article>`;}
 function escapeHtml(str=''){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function renderAll(){ renderSidebar();renderHome();renderPortfolio();renderCalendar();if(currentView==='detail')renderDetail(); }
 
@@ -198,7 +199,7 @@ function createWorkspaceFromForm(){
   const name=document.getElementById('workspaceName').value.trim(); const kind=document.getElementById('workspaceKind').value; const goal=document.getElementById('workspaceGoal').value.trim(); const deadline=document.getElementById('workspaceDeadline').value;
   if(!name)return;
   const palette=[['#799b7c','#406044'],['#7697aa','#416576'],['#a78db3','#675476'],['#b6926f','#76583f'],['#c39750','#805a1a'],['#7e9c91','#41675c']]; const [accent,accentInk]=palette[data.workspaces.length%palette.length]; const id=workspaceId(name);
-  const workspace={id,name,kind,status:'active',accent,accentInk,health:'On track',healthTone:'green',goal:goal||`A new ${kind==='course'?'course':'research project'} workspace.`,deadline,phase:kind==='course'?'Getting started':'Planning',collaborators:kind==='course'?'Coursework':'You',tasks:[],notes:[{id:`note-${Date.now()}`,title:'Start here',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:'Capture your first ideas, decisions, or next steps here.'}],images:[],resources:[],dates:deadline?[{date:deadline,title:'First deadline',type:kind==='course'?'Assignment':'Deadline'}]:[]};
+  const workspace={id,name,kind,status:'active',accent,accentInk,health:'On track',healthTone:'green',goal:goal||`A new ${kind==='course'?'course':'research project'} workspace.`,deadline,phase:kind==='course'?'Getting started':'Planning',collaborators:kind==='course'?'Coursework':'You',tags:[],tasks:[],notes:[{id:`note-${Date.now()}`,title:'Start here',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:'Capture your first ideas, decisions, or next steps here.'}],images:[],resources:[],dates:deadline?[{date:deadline,title:'First deadline',type:kind==='course'?'Assignment':'Deadline'}]:[]};
   data.workspaces.push(workspace); saveData(); document.getElementById('workspaceForm').reset(); closeWorkspaceModal(); openWorkspace(id); toast(`${name} created`);
 }
 async function deleteCurrentWorkspace(){
@@ -213,29 +214,65 @@ async function deleteCurrentWorkspace(){
   activeWorkspace=activeWorkspaces()[0]?.id || data.workspaces[0]?.id || null;
   saveData(); openView('workspaces'); toast(`${workspace.name} permanently deleted`);
 }
+function openWorkspaceEditor(){
+  const workspace=getWs(); if(!workspace)return;
+  document.getElementById('editWorkspaceName').value=workspace.name;
+  document.getElementById('editWorkspaceKind').value=workspace.kind;
+  document.getElementById('editWorkspaceGoal').value=workspace.goal;
+  document.getElementById('editWorkspacePhase').value=workspace.phase;
+  document.getElementById('editWorkspaceAuthors').value=workspace.collaborators;
+  document.getElementById('editWorkspaceTags').value=workspace.tags.join(', ');
+  document.getElementById('editWorkspaceDeadline').value=workspace.deadline || '';
+  document.getElementById('workspaceEditorBackdrop').hidden=false;
+}
+function closeWorkspaceEditor(){ document.getElementById('workspaceEditorBackdrop').hidden=true; }
+function saveWorkspaceEditor(){
+  const workspace=getWs(); if(!workspace)return;
+  const name=document.getElementById('editWorkspaceName').value.trim(); if(!name)return;
+  workspace.name=name; workspace.kind=document.getElementById('editWorkspaceKind').value; workspace.goal=document.getElementById('editWorkspaceGoal').value.trim() || workspace.goal; workspace.phase=document.getElementById('editWorkspacePhase').value.trim() || 'Planning'; workspace.collaborators=document.getElementById('editWorkspaceAuthors').value.trim() || 'You'; workspace.tags=[...new Set(document.getElementById('editWorkspaceTags').value.split(',').map(tag=>tag.trim().replace(/^#/,'')).filter(Boolean))]; workspace.deadline=document.getElementById('editWorkspaceDeadline').value;
+  saveData(); closeWorkspaceEditor(); renderAll(); toast('Workspace settings saved');
+}
+function openDateModal(){ document.getElementById('dateForm').reset(); document.getElementById('dateModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('timelineDate').focus(),10); }
+function closeDateModal(){ document.getElementById('dateModalBackdrop').hidden=true; }
+function saveDate(){ const workspace=getWs(); const date=document.getElementById('timelineDate').value; const title=document.getElementById('timelineTitle').value.trim(); if(!workspace || !date || !title)return; workspace.dates.push({date,title,type:document.getElementById('timelineType').value}); if(!workspace.deadline || date<workspace.deadline)workspace.deadline=date; saveData(); closeDateModal(); renderDetail(); toast('Key date added'); }
+function deleteDate(index){ const workspace=getWs(); const item=workspace?.dates[index]; if(!item || !window.confirm(`Delete “${item.title}”?`))return; workspace.dates.splice(index,1); saveData(); renderDetail(); toast('Key date deleted'); }
+function openResourceModal(){ document.getElementById('resourceForm').reset(); document.getElementById('resourceModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('resourceName').focus(),10); }
+function closeResourceModal(){ document.getElementById('resourceModalBackdrop').hidden=true; }
+function saveResource(){ const workspace=getWs(); const title=document.getElementById('resourceName').value.trim(); const url=document.getElementById('resourceUrl').value.trim(); if(!workspace || !title || !url)return; workspace.resources.push({title,url,meta:document.getElementById('resourceMeta').value.trim() || 'External link'}); saveData(); closeResourceModal(); renderDetail(); toast('Resource link added'); }
+function deleteResource(index){ const workspace=getWs(); const item=workspace?.resources[index]; if(!item || !window.confirm(`Delete the link “${item.title}”?`))return; workspace.resources.splice(index,1); saveData(); renderDetail(); toast('Resource link deleted'); }
+function saveActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note)return; note.title=document.getElementById('noteTitle').value.trim() || 'Untitled note'; note.body=document.getElementById('noteEditor').innerText.trim(); note.date=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(); saveData(); renderDetail(); toast('Note saved'); }
+function deleteActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note || !window.confirm(`Delete “${note.title}”?`))return; workspace.notes=workspace.notes.filter(item=>item.id!==note.id); activeNoteId=workspace.notes[0]?.id || null; saveData(); renderDetail(); toast('Note deleted'); }
 
 document.addEventListener('click',e=>{
   const open=e.target.closest('[data-open-workspace]'); if(open){openWorkspace(open.dataset.openWorkspace);return;}
   const view=e.target.closest('[data-view]'); if(view){openView(view.dataset.view);return;}
   const filter=e.target.closest('[data-filter]'); if(filter){workspaceFilter=filter.dataset.filter;document.querySelectorAll('.filter').forEach(b=>b.classList.toggle('active',b===filter));renderPortfolio();return;}
   const tab=e.target.closest('[data-tab]'); if(tab){activeTab=tab.dataset.tab;renderDetail();return;}
+  const noteLink=e.target.closest('[data-open-note]'); if(noteLink){activeNoteId=noteLink.dataset.openNote;renderDetail();return;}
   if(e.target.closest('#profileButton')||e.target.closest('#googleSignIn')){connectGoogle();return;}
   if(e.target.closest('#signOutButton')){signOut();return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#addFocus'))openModal();
   if(e.target.closest('#newWorkspaceBtn')||e.target.closest('#newWorkspaceTop'))openWorkspaceModal();
+  if(e.target.closest('#editWorkspaceButton'))openWorkspaceEditor();
   if(e.target.closest('#toggleWorkspaceStatus')){const w=getWs(); if(w.status==='completed'){w.status='active';delete w.completedAt;toast(`${w.name} restored to active work`);}else{w.status='completed';w.completedAt=new Date().toISOString().slice(0,10);toast(`${w.name} moved to completed work`);}saveData();renderAll();}
   if(e.target.closest('#deleteWorkspaceButton'))deleteCurrentWorkspace();
   if(e.target.closest('#closeModal'))closeModal();
   if(e.target.closest('#closeWorkspaceModal'))closeWorkspaceModal();
+  if(e.target.closest('#closeWorkspaceEditor'))closeWorkspaceEditor();
+  if(e.target.closest('#closeDateModal'))closeDateModal();
+  if(e.target.closest('#closeResourceModal'))closeResourceModal();
   if(e.target.closest('#menuButton'))document.getElementById('sidebar').classList.toggle('open');
   if(e.target.closest('[data-add-task]'))openModal(e.target.closest('[data-add-task]').dataset.addTask);
-  if(e.target.closest('#newNote')){const w=getWs();w.notes.unshift({id:`n${Date.now()}`,title:'Untitled note',date:'27 JUL 2026',body:'Start documenting your work here.'});saveData();renderDetail();toast('New note page created');}
-  if(e.target.closest('#saveNote')){const w=getWs();if(!w.notes.length)w.notes.unshift({id:`n${Date.now()}`,title:'Working notes',date:'27 JUL 2026',body:''});w.notes[0].body=document.getElementById('noteEditor').innerText.trim();w.notes[0].date='27 JUL 2026';saveData();toast('Note saved on this device');}
+  if(e.target.closest('#newNote')){const w=getWs();const note={id:`n${Date.now()}`,title:'Untitled note',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:''};w.notes.unshift(note);activeNoteId=note.id;saveData();renderDetail();toast('New note page created');}
+  if(e.target.closest('#saveNote'))saveActiveNote();
+  if(e.target.closest('#deleteNote'))deleteActiveNote();
   if(e.target.closest('#uploadImageButton'))document.getElementById('imageUpload').click();
   if(e.target.closest('[data-delete-image]'))deleteResearchImage(e.target.closest('[data-delete-image]').dataset.deleteImage);
-  if(e.target.closest('#addDate'))toast('Key-date editing is ready for the cloud data layer.');
-  if(e.target.closest('#addResource'))toast('Link editing is ready for the cloud data layer.');
+  if(e.target.closest('#addDate'))openDateModal();
+  if(e.target.closest('[data-delete-date]'))deleteDate(Number(e.target.closest('[data-delete-date]').dataset.deleteDate));
+  if(e.target.closest('#addResource'))openResourceModal();
+  if(e.target.closest('[data-delete-resource]'))deleteResource(Number(e.target.closest('[data-delete-resource]').dataset.deleteResource));
   if(e.target.closest('#searchButton'))toast('Search will span tasks and research notes.');
 });
 document.addEventListener('change',e=>{if(e.target.matches('[data-task]')){const w=getWs(e.target.dataset.workspace);const task=w.tasks.find(t=>t.id===e.target.dataset.task);task.done=e.target.checked;saveData();renderAll();toast(task.done?'Task marked complete':'Task reopened');} if(e.target.matches('[data-plan-date]')){const {planDate,planField}=e.target.dataset;data.weekPlan[planDate] ||= {morning:'',afternoon:''};data.weekPlan[planDate][planField]=e.target.value;saveData();toast('Week plan saved');} if(e.target.matches('#imageUpload')){const file=e.target.files?.[0];if(file)uploadImageToWorkspace(file);e.target.value='';}});
@@ -243,5 +280,11 @@ document.getElementById('quickAddForm').addEventListener('submit',e=>{e.preventD
 document.getElementById('modalBackdrop').addEventListener('click',e=>{if(e.target.id==='modalBackdrop')closeModal();});
 document.getElementById('workspaceModalBackdrop').addEventListener('click',e=>{if(e.target.id==='workspaceModalBackdrop')closeWorkspaceModal();});
 document.getElementById('workspaceForm').addEventListener('submit',e=>{e.preventDefault();createWorkspaceFromForm();});
+document.getElementById('workspaceEditorBackdrop').addEventListener('click',e=>{if(e.target.id==='workspaceEditorBackdrop')closeWorkspaceEditor();});
+document.getElementById('workspaceEditorForm').addEventListener('submit',e=>{e.preventDefault();saveWorkspaceEditor();});
+document.getElementById('dateModalBackdrop').addEventListener('click',e=>{if(e.target.id==='dateModalBackdrop')closeDateModal();});
+document.getElementById('dateForm').addEventListener('submit',e=>{e.preventDefault();saveDate();});
+document.getElementById('resourceModalBackdrop').addEventListener('click',e=>{if(e.target.id==='resourceModalBackdrop')closeResourceModal();});
+document.getElementById('resourceForm').addEventListener('submit',e=>{e.preventDefault();saveResource();});
 renderAll();
 initializeCloud();

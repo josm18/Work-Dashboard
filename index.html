@@ -105,6 +105,30 @@
       </div>
     </section>
 
+    <div class="modal-backdrop" id="workspaceEditorBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceEditorTitle">
+        <button class="close-modal" id="closeWorkspaceEditor" aria-label="Close">×</button>
+        <p class="eyebrow">WORKSPACE SETTINGS</p><h2 id="workspaceEditorTitle">Edit workspace</h2>
+        <form id="workspaceEditorForm"><label>Name<input id="editWorkspaceName" required maxlength="80" /></label><label>Type<select id="editWorkspaceKind"><option value="project">Research project</option><option value="course">Course</option></select></label><label>Objective<input id="editWorkspaceGoal" maxlength="160" /></label><label>Current phase<input id="editWorkspacePhase" maxlength="80" placeholder="e.g. Data analysis" /></label><label>Authors / collaborators<input id="editWorkspaceAuthors" maxlength="160" placeholder="Separate names with commas" /></label><label>Tags<input id="editWorkspaceTags" maxlength="160" placeholder="e.g. fieldwork, manuscript, urgent" /></label><label>Next deadline<input id="editWorkspaceDeadline" type="date" /></label><button class="submit-button" type="submit">Save workspace</button></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="dateModalBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="dateModalTitle">
+        <button class="close-modal" id="closeDateModal" aria-label="Close">×</button>
+        <p class="eyebrow">TIMELINE</p><h2 id="dateModalTitle">Add key date</h2>
+        <form id="dateForm"><label>Date<input id="timelineDate" type="date" required /></label><label>Title<input id="timelineTitle" maxlength="100" required placeholder="e.g. Submit draft" /></label><label>Type<select id="timelineType"><option>Deadline</option><option>Milestone</option><option>Meeting</option><option>Assignment</option><option>Exam</option></select></label><button class="submit-button" type="submit">Add date</button></form>
+      </section>
+    </div>
+
+    <div class="modal-backdrop" id="resourceModalBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="resourceModalTitle">
+        <button class="close-modal" id="closeResourceModal" aria-label="Close">×</button>
+        <p class="eyebrow">RESOURCE LINK</p><h2 id="resourceModalTitle">Add a resource</h2>
+        <form id="resourceForm"><label>Name<input id="resourceName" maxlength="100" required placeholder="e.g. Literature folder" /></label><label>URL<input id="resourceUrl" type="url" required placeholder="https://…" /></label><label>Description<input id="resourceMeta" maxlength="120" placeholder="e.g. Google Drive folder" /></label><button class="submit-button" type="submit">Add resource</button></form>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="workspaceModalBackdrop" hidden>
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceModalTitle">
         <button class="close-modal" id="closeWorkspaceModal" aria-label="Close">×</button>
