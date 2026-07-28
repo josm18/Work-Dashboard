@@ -5,7 +5,7 @@ The app stores a user's complete dashboard as one private, versioned cloud state
 ## 1. Create the project and schema
 
 1. Create a new Supabase project in a region appropriate for your research data.
-2. Open **SQL Editor**, create a new query, paste the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it.
+2. Open **SQL Editor**, create a new query, paste the contents of [`supabase/schema.sql`](supabase/schema.sql), and run it. Re-run this file when you update the dashboard: it safely refreshes the timestamp trigger and adds the compare-and-save sync function.
 3. In **Project Settings → API**, copy the Project URL and **publishable** key into `supabase-config.js`.
 
 Never use or expose a `service_role` key in this project. The browser only uses the publishable key; row-level-security rules in the SQL file restrict every row and image to its signed-in owner.
@@ -25,6 +25,6 @@ Deploy this folder to a static host over HTTPS. Add that exact HTTPS URL to Supa
 
 ## What happens after sign-in
 
-On the first successful login, the dashboard currently saved in the browser is copied into your private `dashboard_state` row. Later changes save locally first and then sync to that row after a short delay. When you sign in from a second device, it loads the private cloud version.
+On the first successful login, the dashboard currently saved in the browser is copied into your private `dashboard_state` row. Later changes save locally first and then sync to that row after a short delay. Each save checks the cloud version it originally loaded. If another device saved first, the app stops syncing and offers a local-backup download, a cloud reload, or an explicit choice to replace the cloud version.
 
 The `project-images` bucket is private and accepts JPEG, PNG, WebP, and GIF images up to 10 MB. Its UI uploader is the next feature to wire into note pages.

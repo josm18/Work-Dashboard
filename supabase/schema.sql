@@ -42,6 +42,54 @@ create trigger dashboard_state_updated_at
   before update on public.dashboard_state
   for each row execute procedure public.set_dashboard_updated_at();
 
+-- Compare-and-save dashboard state. A browser may update the row only when the
+-- timestamp matches the version it originally loaded; otherwise PostgreSQL
+-- raises a serialization-style conflict instead of silently overwriting data.
+create or replace function public.save_dashboard_state(
+  expected_updated_at timestamptz,
+  new_data jsonb
+)
+returns public.dashboard_state
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  saved public.dashboard_state;
+begin
+  if auth.uid() is null then
+    raise exception 'Authentication required' using errcode = '28000';
+  end if;
+
+  if expected_updated_at is null then
+    insert into public.dashboard_state (user_id, data)
+    values (auth.uid(), new_data)
+    on conflict (user_id) do nothing
+    returning * into saved;
+
+    if found then
+      return saved;
+    end if;
+
+    raise exception 'Dashboard has changed on another device' using errcode = '40001';
+  end if;
+
+  update public.dashboard_state
+  set data = new_data
+  where user_id = auth.uid()
+    and updated_at = expected_updated_at
+  returning * into saved;
+
+  if not found then
+    raise exception 'Dashboard has changed on another device' using errcode = '40001';
+  end if;
+
+  return saved;
+end;
+$$;
+
+grant execute on function public.save_dashboard_state(timestamptz, jsonb) to authenticated;
+
 -- Private research-note images. Images must be uploaded under <user-id>/...
 insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 values ('project-images', 'project-images', false, 10485760, array['image/jpeg', 'image/png', 'image/webp', 'image/gif'])

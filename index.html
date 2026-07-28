@@ -121,6 +121,14 @@
       </div>
     </section>
 
+    <div class="modal-backdrop" id="cloudConflictBackdrop" hidden>
+      <section class="modal" role="dialog" aria-modal="true" aria-labelledby="cloudConflictTitle">
+        <p class="eyebrow">SYNC CONFLICT</p><h2 id="cloudConflictTitle">Another device saved changes.</h2>
+        <p class="conflict-copy">Your local changes have not been overwritten. Download a backup before choosing which version should be kept in the cloud.</p>
+        <div class="conflict-actions"><button class="archive-button" id="downloadConflictBackup">Download local backup</button><button class="archive-button" id="loadCloudVersion">Load cloud version</button><button class="submit-button" id="forceCloudSave">Use this device’s version</button></div>
+      </section>
+    </div>
+
     <div class="modal-backdrop" id="workspaceEditorBackdrop" hidden>
       <section class="modal" role="dialog" aria-modal="true" aria-labelledby="workspaceEditorTitle">
         <button class="close-modal" id="closeWorkspaceEditor" aria-label="Close">×</button>

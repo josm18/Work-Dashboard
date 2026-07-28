@@ -30,6 +30,8 @@ let supabaseClient = null;
 let cloudUser = null;
 let cloudEnabled = false;
 let cloudSaveTimer = null;
+let cloudVersion = null;
+let cloudConflict = null;
 let researchDigestTimer = null;
 
 // Review this list once per year against the chosen journal-ranking source. The
@@ -61,7 +63,7 @@ function parseLegacyTaskDue(value){
 function normalizeData(candidate){
   const saved = candidate && Array.isArray(candidate.workspaces) ? candidate : structuredClone(initialData);
   if(!['light','dark'].includes(saved.theme)) saved.theme='light';
-  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; (workspace.tasks||[]).forEach(task=>{ if(!task.priority)task.priority='medium'; if(!Array.isArray(task.tags))task.tags=[]; if(!Array.isArray(task.subtasks))task.subtasks=[]; if(!task.description)task.description=''; if(!task.dueDate)task.dueDate=parseLegacyTaskDue(task.due); task.due=taskDueLabel(task.dueDate); }); });
+  saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; workspace.notes.forEach(note=>{if(!Array.isArray(note.references))note.references=[];}); (workspace.tasks||[]).forEach(task=>{ if(!task.priority)task.priority='medium'; if(!Array.isArray(task.tags))task.tags=[]; if(!Array.isArray(task.subtasks))task.subtasks=[]; if(!task.description)task.description=''; if(!task.dueDate)task.dueDate=parseLegacyTaskDue(task.due); task.due=taskDueLabel(task.dueDate); }); });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
   return saved;
@@ -86,22 +88,32 @@ function updateProfile(){
   signOut.hidden=true;
   name.textContent=hasCloudConfig()?'Sign in with Google':'Connect cloud'; initial.textContent='A';
 }
-function queueCloudSave(){ clearTimeout(cloudSaveTimer); setSyncStatus('Saving securely…','#c18d38'); cloudSaveTimer=setTimeout(syncCloudState,700); }
+function queueCloudSave(){ if(cloudConflict)return; clearTimeout(cloudSaveTimer); setSyncStatus('Saving securely…','#c18d38'); cloudSaveTimer=setTimeout(syncCloudState,700); }
 async function syncCloudState(){
-  if(!cloudEnabled || !supabaseClient || !cloudUser)return;
-  const { error }=await supabaseClient.from('dashboard_state').upsert({user_id:cloudUser.id,data},{onConflict:'user_id'});
-  if(error){ console.error('Cloud sync failed:',error); setSyncStatus('Sync needs attention','#b6604f'); return; }
+  if(!cloudEnabled || !supabaseClient || !cloudUser || cloudConflict)return;
+  const { data:result, error }=await supabaseClient.rpc('save_dashboard_state',{expected_updated_at:cloudVersion,new_data:data});
+  if(error){
+    if(error.code==='40001'){ cloudConflict={data:structuredClone(data),detectedAt:new Date().toISOString()}; localStorage.setItem('fieldwork-sync-conflict',JSON.stringify(cloudConflict)); setSyncStatus('Sync conflict — action needed','#b6604f'); openCloudConflict(); return; }
+    console.error('Cloud sync failed:',error); setSyncStatus(error.code==='PGRST202'?'Cloud SQL upgrade required':'Sync needs attention','#b6604f'); return;
+  }
+  cloudVersion=result?.updated_at || cloudVersion;
   setSyncStatus('Synced securely','#70a46f');
 }
 async function loadCloudState(user){
   cloudUser=user; updateProfile(); setSyncStatus('Loading your dashboard…','#c18d38');
-  const { data:row, error }=await supabaseClient.from('dashboard_state').select('data').eq('user_id',user.id).maybeSingle();
+  const { data:row, error }=await supabaseClient.from('dashboard_state').select('data,updated_at').eq('user_id',user.id).maybeSingle();
   if(error && error.code!=='PGRST116'){ console.error('Cloud load failed:',error); setSyncStatus('Cloud setup incomplete','#b6604f'); setAppAccess(false,'We could not load this private dashboard. Please try again.'); return; }
   cloudEnabled=true;
-  if(row?.data){ data=normalizeData(row.data); localStorage.setItem('fieldwork-data',JSON.stringify(data)); renderAll(); setSyncStatus('Synced securely','#70a46f'); }
+  cloudConflict=null;
+  if(row?.data){ data=normalizeData(row.data); cloudVersion=row.updated_at; localStorage.setItem('fieldwork-data',JSON.stringify(data)); renderAll(); setSyncStatus('Synced securely','#70a46f'); }
   else { await syncCloudState(); }
   setAppAccess(true);
 }
+function openCloudConflict(){ document.getElementById('cloudConflictBackdrop').hidden=false; }
+function closeCloudConflict(){ document.getElementById('cloudConflictBackdrop').hidden=true; }
+function downloadConflictBackup(){ if(!cloudConflict)return; const blob=new Blob([JSON.stringify({format:'fieldwork-conflict-backup',exportedAt:new Date().toISOString(),data:cloudConflict.data},null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download=`fieldwork-conflict-${localDateKey(new Date())}.json`; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),0); toast('Local conflict backup downloaded'); }
+async function loadCloudVersionAfterConflict(){ if(!cloudUser)return; closeCloudConflict(); await loadCloudState(cloudUser); toast('Loaded the cloud version. Your local backup remains downloaded if you saved it.'); }
+async function forceCloudSave(){ if(!cloudConflict || !supabaseClient || !cloudUser)return; const {data:result,error}=await supabaseClient.from('dashboard_state').upsert({user_id:cloudUser.id,data:cloudConflict.data},{onConflict:'user_id'}).select('updated_at').single(); if(error){console.error('Force sync failed:',error);toast('Could not replace the cloud version.');return;} data=cloudConflict.data; cloudVersion=result.updated_at; cloudConflict=null; closeCloudConflict(); setSyncStatus('Synced securely','#70a46f'); toast('This device’s version replaced the cloud version.'); }
 async function initializeCloud(){
   updateProfile();
   if(!hasCloudConfig()){ setSyncStatus('Local preview','#8b958b'); setAppAccess(true); return; }
@@ -284,10 +296,22 @@ function renderWeekPlanner(){
   document.getElementById('weekRange').textContent=`${start.toLocaleDateString('en-GB',{day:'numeric',month:'short'})} – ${end.toLocaleDateString('en-GB',{day:'numeric',month:'short'})}`;
 }
 function renderCalendar(){ renderWeekPlanner(); const dates=activeWorkspaces().flatMap(w=>w.dates.map(d=>({...d,workspace:w}))).sort((a,b)=>a.date.localeCompare(b.date)); document.getElementById('calendarList').innerHTML=dates.map(d=>`<article class="calendar-event" style="--accent:${d.workspace.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.workspace.name)} · ${escapeHtml(d.type)}</p></div></article>`).join(''); }
+const noteTemplates={
+  literature:{label:'Literature note',body:'# Citation\n\n## Research question\n\n## Methods\n\n## Key findings\n\n## Limitations\n\n## How this changes my project\n'},
+  meeting:{label:'Meeting note',body:'# Meeting\n\n**Date:** \n**People:** \n\n## Decisions\n\n## Actions\n\n## Open questions\n'},
+  field:{label:'Field log',body:'# Field log\n\n**Date / location:** \n**Conditions:** \n\n## Observations\n\n## Deviations from protocol\n\n## Follow-up\n'}
+};
+function safeExternalUrl(value=''){ try { const url=new URL(value); return ['http:','https:'].includes(url.protocol)?url.href:''; } catch { return ''; } }
+function inlineMarkdown(value){ return escapeHtml(value).replace(/`([^`]+)`/g,'<code>$1</code>').replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,(_,label,url)=>{const href=safeExternalUrl(url);return href?`<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`:label;}); }
+function renderMarkdown(value=''){
+  const lines=String(value).split('\n'); let html='',listOpen=false; const closeList=()=>{if(listOpen){html+='</ul>';listOpen=false;}};
+  lines.forEach(line=>{if(/^\s*-\s+/.test(line)){if(!listOpen){html+='<ul>';listOpen=true;}html+=`<li>${inlineMarkdown(line.replace(/^\s*-\s+/,''))}</li>`;return;}closeList();if(/^###\s+/.test(line))html+=`<h4>${inlineMarkdown(line.slice(4))}</h4>`;else if(/^##\s+/.test(line))html+=`<h3>${inlineMarkdown(line.slice(3))}</h3>`;else if(/^#\s+/.test(line))html+=`<h2>${inlineMarkdown(line.slice(2))}</h2>`;else if(line.trim())html+=`<p>${inlineMarkdown(line)}</p>`;}); closeList(); return html || '<p class="portfolio-empty">Nothing written yet.</p>';
+}
+function noteReferencesHtml(note){ const references=note.references||[]; return `<section class="note-references"><p class="eyebrow">LINKED REFERENCES</p><div class="reference-list">${references.length?references.map((reference,index)=>{const href=safeExternalUrl(reference.url);return `<div class="reference-item"><div><a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(reference.title)}</a>${reference.meta?`<p>${escapeHtml(reference.meta)}</p>`:''}</div><button class="delete-row" data-delete-reference="${index}">Remove</button></div>`;}).join(''):'<p class="portfolio-empty">Link a DOI, publisher page, or related source.</p>'}</div><form class="reference-form" id="referenceForm"><input id="referenceTitle" maxlength="180" required placeholder="Reference title" /><input id="referenceUrl" type="url" required placeholder="DOI or source URL" /><input id="referenceMeta" maxlength="140" placeholder="Authors, journal, year (optional)" /><button class="archive-button" type="submit">Add reference</button></form></section>`; }
 function heroHtml(w){const next=nextWorkspaceDeadline(w);return `<p class="project-kind">${w.kind.toUpperCase()} · ${escapeHtml(w.phase)}</p><div class="project-title-line"><h1>${escapeHtml(w.name)}</h1><span class="health" style="${healthStyle(w)}">${workspaceStateLabel(w)}</span></div><p>${escapeHtml(w.goal)}</p><div class="hero-meta"><span class="meta-chip">${progress(w)}% task progress</span>${next?`<span class="meta-chip">Next: ${fmtDate(next.date)} · ${escapeHtml(next.title)}</span>`:''}<span class="meta-chip">${escapeHtml(w.collaborators)}</span>${w.tags.map(tag=>`<span class="tag-chip">#${escapeHtml(tag)}</span>`).join('')}</div>`;}
 function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById('projectHero').innerHTML=heroHtml(w); document.getElementById('detailActions').innerHTML=`<button class="archive-button edit-workspace-button" id="editWorkspaceButton">Edit workspace</button><button class="archive-button ${w.status==='completed'?'restore-button':''}" id="toggleWorkspaceStatus">${w.status==='completed'?'Restore to active':'Mark as complete'}</button><button class="archive-button delete-workspace-button" id="deleteWorkspaceButton">Delete workspace</button>`; document.querySelectorAll('.detail-tab').forEach(b=>b.classList.toggle('active',b.dataset.tab===activeTab)); let content='';
   if(activeTab==='overview') { const next=nextWorkspaceDeadline(w); content=`<div class="detail-layout"><div><section class="detail-section"><p class="eyebrow">WHAT'S NEXT</p><h2>Tasks</h2><div class="task-list">${w.tasks.map(t=>taskHtml(t,w,false,true)).join('')}</div><button class="add-inline" data-add-task="${w.id}">+ Add task</button></section><section class="detail-section"><p class="eyebrow">RECENT NOTES</p><h2>Research trail</h2><div class="note-list">${w.notes.slice(0,2).map(n=>noteCard(n)).join('')}</div></section></div><aside class="detail-side"><section class="panel"><p class="eyebrow">CURRENT PHASE</p><h3>${escapeHtml(w.phase)}</h3><p>Your task progress is ${progress(w)}%. Keep the next action specific and small.</p></section><section class="panel"><p class="eyebrow">AT A GLANCE</p><h3>${w.tasks.filter(t=>!t.done).length} open tasks</h3><p>${next?`Next deadline: ${fmtDate(next.date)} · ${escapeHtml(next.title)}`:'There is no scheduled deadline.'}</p></section></aside></div>`; }
-  if(activeTab==='notes') { const note=w.notes.find(item=>item.id===activeNoteId) || w.notes[0]; if(note)activeNoteId=note.id; content=`<div class="notes-layout">${note?`<div class="note-toolbar"><div><p class="eyebrow">LIVING NOTE</p><input class="note-editor-title" id="noteTitle" value="${escapeHtml(note.title)}" aria-label="Note title" /></div><div class="note-actions"><button class="delete-text-button" id="deleteNote">Delete</button><button id="saveNote">Save changes</button></div></div><div class="note-editor" id="noteEditor" contenteditable="true" data-placeholder="Start writing a research note…">${escapeHtml(note.body)}</div>`:'<p class="portfolio-empty">Create a note to start documenting this workspace.</p>'}<section class="image-section"><div class="image-section-heading"><p class="eyebrow">RESEARCH IMAGES</p><button class="upload-image-button" id="uploadImageButton">+ Upload image</button></div><div class="image-gallery" id="imageGallery"></div></section><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`; }
+  if(activeTab==='notes') { const note=w.notes.find(item=>item.id===activeNoteId) || w.notes[0]; if(note)activeNoteId=note.id; content=`<div class="notes-layout">${note?`<div class="note-toolbar"><div><p class="eyebrow">MARKDOWN NOTE</p><input class="note-editor-title" id="noteTitle" value="${escapeHtml(note.title)}" aria-label="Note title" /></div><div class="note-actions"><button class="delete-text-button" id="deleteNote">Delete</button><button id="previewNote">Preview</button><button id="saveNote">Save changes</button></div></div><div class="note-template-bar"><label>Template<select id="noteTemplate"><option value="">Choose a template…</option>${Object.entries(noteTemplates).map(([id,template])=>`<option value="${id}">${template.label}</option>`).join('')}</select></label><button class="archive-button" id="applyNoteTemplate">Apply template</button><span>Markdown supports headings, lists, bold, italics, code, and links.</span></div><textarea class="note-editor note-markdown-editor" id="noteEditor" placeholder="Start writing a research note…">${escapeHtml(note.body)}</textarea><article class="note-preview" id="notePreview" hidden>${renderMarkdown(note.body)}</article>${noteReferencesHtml(note)}`:'<p class="portfolio-empty">Create a note to start documenting this workspace.</p>'}<section class="image-section"><div class="image-section-heading"><p class="eyebrow">RESEARCH IMAGES</p><button class="upload-image-button" id="uploadImageButton">+ Upload image</button></div><div class="image-gallery" id="imageGallery"></div></section><section class="detail-section" style="margin-top:31px"><p class="eyebrow">NOTE PAGES</p><div class="note-list">${w.notes.map(noteCard).join('')}</div><button class="add-inline" id="newNote">+ New note page</button></section></div>`; }
   if(activeTab==='timeline') content=`<div class="timeline-detail">${w.dates.length?w.dates.sort((a,b)=>a.date.localeCompare(b.date)).map((d,index)=>`<article class="calendar-event timeline-entry" style="--accent:${w.accent}"><time class="event-date">${fmtDate(d.date).toUpperCase()}</time><span class="event-dot"></span><div class="event-copy"><h3>${escapeHtml(d.title)}</h3><p>${escapeHtml(d.type)} · ${escapeHtml(w.name)}</p></div><button class="delete-row" data-delete-date="${index}">Delete</button></article>`).join(''):'<p class="portfolio-empty">No milestones or deadlines recorded yet.</p>'}<button class="add-inline" id="addDate">+ Add key date</button></div>`;
   if(activeTab==='resources') content=`<div class="resources-list"><p class="eyebrow">LINKED MATERIAL</p><h2 style="font-family:var(--serif);font-weight:500;font-size:29px;margin:0 0 13px">Resources</h2>${w.resources.length?w.resources.map((r,index)=>`<div class="resource-item"><span class="resource-icon">↗</span><div><a href="${escapeHtml(r.url)}" target="_blank" rel="noreferrer">${escapeHtml(r.title)}</a><p>${escapeHtml(r.meta)}</p></div><button class="delete-row" data-delete-resource="${index}">Delete</button></div>`).join(''):'<p class="portfolio-empty">No resource links yet.</p>'}<button class="add-inline" id="addResource">+ Add link</button></div>`;
   document.getElementById('detailBody').innerHTML=content;
@@ -407,7 +431,11 @@ function renderSearchResults(query){
   }); }
   document.getElementById('searchResults').innerHTML=!term?'<p class="portfolio-empty">Search workspace names, tasks, notes, tags, and resources.</p>':results.length?results.slice(0,30).map(result=>`<button class="search-result" data-search-workspace="${result.workspaceId}" ${result.noteId?`data-search-note="${result.noteId}"`:''} ${result.tab?`data-search-tab="${result.tab}"`:''}><span>${result.type}</span><strong>${escapeHtml(result.title)}</strong><small>${escapeHtml(result.detail)}</small></button>`).join(''):'<p class="portfolio-empty">No matches found.</p>';
 }
-function saveActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note)return; note.title=document.getElementById('noteTitle').value.trim() || 'Untitled note'; note.body=document.getElementById('noteEditor').innerText.trim(); note.date=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(); saveData(); renderDetail(); toast('Note saved'); }
+function saveActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note)return; note.title=document.getElementById('noteTitle').value.trim() || 'Untitled note'; note.body=document.getElementById('noteEditor').value.trim(); note.date=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(); saveData(); renderDetail(); toast('Note saved'); }
+function toggleNotePreview(){ const editor=document.getElementById('noteEditor'); const preview=document.getElementById('notePreview'); const button=document.getElementById('previewNote'); if(!editor||!preview||!button)return; const showing=!preview.hidden; if(showing){preview.hidden=true;editor.hidden=false;button.textContent='Preview';editor.focus();return;} preview.innerHTML=renderMarkdown(editor.value); preview.hidden=false; editor.hidden=true; button.textContent='Edit'; }
+function applyNoteTemplate(){ const editor=document.getElementById('noteEditor'); const template=noteTemplates[document.getElementById('noteTemplate')?.value]; if(!editor||!template)return; if(editor.value.trim()&&!window.confirm('Replace this note with the selected template?'))return; editor.value=template.body; toast(`${template.label} applied`); }
+function addReference(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); const title=document.getElementById('referenceTitle')?.value.trim(); const url=safeExternalUrl(document.getElementById('referenceUrl')?.value.trim()); if(!note||!title||!url){toast('Add a title and a valid http(s) link.');return;} note.references ||= []; note.references.push({title,url,meta:document.getElementById('referenceMeta').value.trim()}); saveData(); renderDetail(); toast('Reference linked'); }
+function deleteReference(index){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note?.references?.[index])return; note.references.splice(index,1); saveData(); renderDetail(); toast('Reference removed'); }
 function deleteActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note || !window.confirm(`Delete “${note.title}”?`))return; workspace.notes=workspace.notes.filter(item=>item.id!==note.id); activeNoteId=workspace.notes[0]?.id || null; saveData(); renderDetail(); toast('Note deleted'); }
 
 document.addEventListener('click',e=>{
@@ -420,6 +448,9 @@ document.addEventListener('click',e=>{
   const noteLink=e.target.closest('[data-open-note]'); if(noteLink){activeNoteId=noteLink.dataset.openNote;renderDetail();return;}
   if(e.target.closest('#profileButton')||e.target.closest('#googleSignIn')){connectGoogle();return;}
   if(e.target.closest('#signOutButton')){signOut();return;}
+  if(e.target.closest('#downloadConflictBackup'))downloadConflictBackup();
+  if(e.target.closest('#loadCloudVersion'))loadCloudVersionAfterConflict();
+  if(e.target.closest('#forceCloudSave'))forceCloudSave();
   if(e.target.closest('#themeToggle')){data.theme=data.theme==='dark'?'light':'dark';saveData();applyTheme();toast(`${data.theme==='dark'?'Dark':'Light'} mode enabled`);return;}
   if(e.target.closest('#quickAdd'))openModal();
   if(e.target.closest('#taskOverviewAdd'))openModal();
@@ -437,9 +468,12 @@ document.addEventListener('click',e=>{
   if(e.target.closest('#closeSearchModal'))closeSearchModal();
   if(e.target.closest('#menuButton'))document.getElementById('sidebar').classList.toggle('open');
   if(e.target.closest('[data-add-task]'))openModal(e.target.closest('[data-add-task]').dataset.addTask);
-  if(e.target.closest('#newNote')){const w=getWs();const note={id:`n${Date.now()}`,title:'Untitled note',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:''};w.notes.unshift(note);activeNoteId=note.id;saveData();renderDetail();toast('New note page created');}
+  if(e.target.closest('#newNote')){const w=getWs();const note={id:`n${Date.now()}`,title:'Untitled note',date:new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(),body:'',references:[]};w.notes.unshift(note);activeNoteId=note.id;saveData();renderDetail();toast('New note page created');}
   if(e.target.closest('#saveNote'))saveActiveNote();
+  if(e.target.closest('#previewNote'))toggleNotePreview();
+  if(e.target.closest('#applyNoteTemplate'))applyNoteTemplate();
   if(e.target.closest('#deleteNote'))deleteActiveNote();
+  if(e.target.closest('[data-delete-reference]'))deleteReference(Number(e.target.closest('[data-delete-reference]').dataset.deleteReference));
   if(e.target.closest('[data-edit-task]')){const taskButton=e.target.closest('[data-edit-task]');openTaskEditor(taskButton.dataset.taskWorkspace,taskButton.dataset.editTask);}
   if(e.target.closest('[data-delete-task]')){const taskButton=e.target.closest('[data-delete-task]');deleteTask(taskButton.dataset.taskWorkspace,taskButton.dataset.deleteTask);}
   if(e.target.closest('#uploadImageButton'))document.getElementById('imageUpload').click();
@@ -467,7 +501,9 @@ document.getElementById('resourceForm').addEventListener('submit',e=>{e.preventD
 document.getElementById('taskEditorBackdrop').addEventListener('click',e=>{if(e.target.id==='taskEditorBackdrop')closeTaskEditor();});
 document.getElementById('taskEditorForm').addEventListener('submit',e=>{e.preventDefault();saveTaskEditor();});
 document.getElementById('searchModalBackdrop').addEventListener('click',e=>{if(e.target.id==='searchModalBackdrop')closeSearchModal();});
+document.getElementById('cloudConflictBackdrop').addEventListener('click',e=>{if(e.target.id==='cloudConflictBackdrop')closeCloudConflict();});
 document.getElementById('searchInput').addEventListener('input',e=>renderSearchResults(e.target.value));
+document.addEventListener('submit',e=>{if(e.target.id==='referenceForm'){e.preventDefault();addReference();}});
 renderAll();
 loadResearchDigest();
 initializeCloud();
