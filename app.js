@@ -30,7 +30,6 @@ let supabaseClient = null;
 let cloudUser = null;
 let cloudEnabled = false;
 let cloudSaveTimer = null;
-let researchDigestTimer = null;
 
 // Review this list once per year against the chosen journal-ranking source. The
 // feed deliberately stores ISSNs rather than trying to infer a journal's quartile
@@ -41,14 +40,15 @@ const researchDigestSources = [
   {track:'Evolution & population genomics',issn:'0014-3820'}, // Evolution
   {track:'Evolution & population genomics',issn:'1759-6653'}, // Genome Biology and Evolution
   {track:'Evolution & population genomics',issn:'1088-9051'}, // Genome Research
+  {track:'Evolution & population genomics',issn:'1476-4687'}, // Nature
+  {track:'Evolution & population genomics',issn:'1095-9203'}, // Science
   {track:'AI',issn:'2522-5839'}, // Nature Machine Intelligence
   {track:'AI',issn:'0004-3702'}, // Artificial Intelligence
   {track:'AI',issn:'1532-4435'}, // Journal of Machine Learning Research
   {track:'AI',issn:'0885-6125'}, // Machine Learning
   {track:'AI',issn:'0162-8828'} // IEEE Transactions on Pattern Analysis and Machine Intelligence
 ];
-const researchDigestCacheKey = 'fieldwork-research-digest-v2';
-const researchDigestRefreshMs = 5*60*60*1000;
+const researchDigestCacheKey = 'fieldwork-research-digest-v1';
 
 function parseLegacyTaskDue(value){
   const label=String(value||'').trim(); if(!label || /^(no date|when resumed)$/i.test(label))return '';
@@ -61,7 +61,6 @@ function normalizeData(candidate){
   if(!['light','dark'].includes(saved.theme)) saved.theme='light';
   saved.workspaces.forEach(workspace => { if(!workspace.status) workspace.status='active'; if(!Array.isArray(workspace.images)) workspace.images=[]; if(!Array.isArray(workspace.tags)) workspace.tags=[]; if(!Array.isArray(workspace.notes)) workspace.notes=[]; if(!Array.isArray(workspace.dates)) workspace.dates=[]; if(!Array.isArray(workspace.resources)) workspace.resources=[]; (workspace.tasks||[]).forEach(task=>{ if(!task.priority)task.priority='medium'; if(!Array.isArray(task.tags))task.tags=[]; if(!Array.isArray(task.subtasks))task.subtasks=[]; if(!task.description)task.description=''; if(!task.dueDate)task.dueDate=parseLegacyTaskDue(task.due); task.due=taskDueLabel(task.dueDate); }); });
   if(!saved.weekPlan) saved.weekPlan=structuredClone(initialData.weekPlan);
-  if(!Array.isArray(saved.trash)) saved.trash=[];
   Object.values(saved.weekPlan).forEach(plan => { if(!('morning' in plan)){ plan.morning=plan.workspace||''; plan.afternoon=''; delete plan.workspace; delete plan.note; } });
   return saved;
 }
@@ -71,11 +70,6 @@ function loadData(){
   } catch { return structuredClone(initialData); }
 }
 function saveData(){ localStorage.setItem('fieldwork-data', JSON.stringify(data)); if(cloudEnabled) queueCloudSave(); }
-function moveToTrash(type,payload,workspaceId=''){ data.trash ||= []; data.trash.unshift({id:crypto.randomUUID?.() || `trash-${Date.now()}`,type,workspaceId,deletedAt:new Date().toISOString(),payload:structuredClone(payload)}); }
-function exportDashboard(){ const backup={format:'fieldwork-backup',version:1,exportedAt:new Date().toISOString(),data}; const blob=new Blob([JSON.stringify(backup,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const link=document.createElement('a'); link.href=url; link.download=`fieldwork-backup-${localDateKey(new Date())}.json`; document.body.append(link); link.click(); link.remove(); setTimeout(()=>URL.revokeObjectURL(url),0); toast('Dashboard backup exported'); }
-async function importDashboardFile(file){ try { const parsed=JSON.parse(await file.text()); const imported=normalizeData(parsed?.format==='fieldwork-backup'?parsed.data:parsed); if(!Array.isArray(imported.workspaces))throw new Error('Not a Fieldwork backup'); if(!window.confirm('Replace this dashboard with the imported backup? Your current dashboard will be kept in Deleted items first.'))return; const previous=structuredClone(data); data=imported; moveToTrash('dashboard-backup',previous); saveData(); renderAll(); toast('Backup imported'); } catch(error){ console.error('Backup import failed:',error); toast('This file is not a valid Fieldwork backup.'); } }
-function restoreTrashItem(id){ const item=(data.trash||[]).find(entry=>entry.id===id); if(!item)return; const workspace=getWs(item.workspaceId); if(item.type==='workspace')data.workspaces.unshift(item.payload); else if(item.type==='task'&&workspace)workspace.tasks.unshift(item.payload); else if(item.type==='note'&&workspace)workspace.notes.unshift(item.payload); else if(item.type==='date'&&workspace)workspace.dates.unshift(item.payload); else if(item.type==='resource'&&workspace)workspace.resources.unshift(item.payload); else { toast('Its workspace no longer exists, so this item cannot be restored.'); return; } data.trash=data.trash.filter(entry=>entry.id!==id); saveData(); renderAll(); toast(`${titleCase(item.type.replace('-',' '))} restored`); }
-function renderRecovery(){ const list=document.getElementById('recoveryList'); if(!list)return; const items=data.trash||[]; list.innerHTML=items.length?items.map(item=>{ const title=item.type==='workspace'?item.payload.name:item.type==='dashboard-backup'?'Dashboard before import':item.payload.title || item.payload.name || 'Untitled item'; const date=new Date(item.deletedAt).toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); return `<article class="recovery-item"><div class="recovery-item-copy"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(titleCase(item.type.replace('-',' ')))} · deleted ${escapeHtml(date)}</span></div>${item.type==='dashboard-backup'?'':`<button class="archive-button restore-button" data-restore-trash="${item.id}">Restore</button>`}</article>`; }).join(''):'<p class="portfolio-empty">Nothing has been deleted.</p>'; }
 function cloudConfig(){ return window.FIELDWORK_SUPABASE || {}; }
 function hasCloudConfig(){ const config=cloudConfig(); return Boolean(config.url && config.publishableKey); }
 function setAppAccess(granted, message=''){
@@ -242,37 +236,33 @@ function renderTaskOverview(){
   document.querySelectorAll('[data-task-filter]').forEach(button=>button.classList.toggle('active',button.dataset.taskFilter===taskFilter));
 }
 function taskHtmlForOverview(task){ return taskHtml(task,task.workspace,true,true); }
-function digestCycleKey(){ return String(Math.floor(Date.now()/researchDigestRefreshMs)); }
+function digestDayKey(){ return localDateKey(new Date()); }
 function digestRandom(seed){ let value=0; for(const char of seed)value=(value*31+char.charCodeAt(0))>>>0; return ()=>{value=(value*1664525+1013904223)>>>0;return value/4294967296;}; }
 function selectDigestPapers(papers){
-  const random=digestRandom(digestCycleKey()); const unique=[...new Map(papers.filter(item=>item.title&&item.doi).map(item=>[item.doi,item])).values()];
+  const random=digestRandom(digestDayKey()); const unique=[...new Map(papers.filter(item=>item.title&&item.doi).map(item=>[item.doi,item])).values()];
   const pick=(items,count)=>[...items].sort(()=>random()-.5).slice(0,count);
-  const evolution=pick(unique.filter(item=>item.track==='Evolution & population genomics'),5);
-  const ai=pick(unique.filter(item=>item.track==='AI'),5);
+  const evolution=pick(unique.filter(item=>item.track==='Evolution & population genomics'),2);
+  const ai=pick(unique.filter(item=>item.track==='AI'),2);
   return [...evolution,...ai].sort(()=>random()-.5);
 }
-function selectDigestSources(){ const random=digestRandom(`${digestCycleKey()}-sources`); const select=track=>researchDigestSources.filter(source=>source.track===track).sort(()=>random()-.5).slice(0,2); return [...select('Evolution & population genomics'),...select('AI')]; }
-function showDigestHeadline(papers,index=0){ const copy=document.getElementById('researchDigestCopy'); const paper=papers[index]; if(!copy||!paper)return; copy.textContent=`${paper.title} — ${paper.author} · ${paper.journal}`; copy.classList.remove('cycling'); void copy.offsetWidth; copy.classList.add('cycling'); }
 function renderResearchDigest(papers, status=''){
   const copy=document.getElementById('researchDigestCopy'); const menu=document.getElementById('researchDigestMenu'); if(!copy||!menu)return;
-  clearInterval(researchDigestTimer); if(!papers?.length){ copy.textContent=status || 'Research digest unavailable'; menu.innerHTML=`<p class="digest-feed-note">${escapeHtml(status || 'We could not load recent papers. Please try again later.')}</p>`; return; }
-  showDigestHeadline(papers); let index=0; researchDigestTimer=setInterval(()=>{index=(index+1)%papers.length;showDigestHeadline(papers,index);},7000);
-  menu.innerHTML=`<p class="digest-menu-heading">RECENT PAPERS · EVOLUTION, POPULATION GENOMICS & AI</p>${papers.map(paper=>`<a class="digest-paper" href="https://doi.org/${encodeURIComponent(paper.doi)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.author)} · ${escapeHtml(paper.journal)}</span></a>`).join('')}<p class="digest-feed-note">A rotating selection of ten papers, refreshed every five hours, from the dashboard’s curated Q1 source list. Journal rankings should be reviewed annually.</p>`;
+  if(!papers?.length){ copy.textContent=status || 'Research digest unavailable'; menu.innerHTML=`<p class="digest-feed-note">${escapeHtml(status || 'We could not load recent papers. Please try again later.')}</p>`; return; }
+  copy.textContent=`${papers[0].title} — ${papers[0].author}`;
+  menu.innerHTML=`<p class="digest-menu-heading">RECENT PAPERS · EVOLUTION, POPULATION GENOMICS & AI</p>${papers.map(paper=>`<a class="digest-paper" href="https://doi.org/${encodeURIComponent(paper.doi)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.author)} · ${escapeHtml(paper.track)}</span></a>`).join('')}<p class="digest-feed-note">A rotating selection from the dashboard’s curated Q1 source list. Journal rankings should be reviewed annually.</p>`;
 }
-function readDigestCache(){ try { const cached=JSON.parse(localStorage.getItem(researchDigestCacheKey)); return cached?.cachedAt&&Date.now()-cached.cachedAt<researchDigestRefreshMs&&Array.isArray(cached.papers)?cached:null; } catch { return null; } }
+function readDigestCache(){ try { const cached=JSON.parse(localStorage.getItem(researchDigestCacheKey)); return cached?.day===digestDayKey()&&Array.isArray(cached.papers)?cached:null; } catch { return null; } }
 async function loadResearchDigest(){
   const cached=readDigestCache(); if(cached){ renderResearchDigest(cached.papers); return; }
   const since=new Date(); since.setDate(since.getDate()-120); const from=localDateKey(since);
   try {
-    // Crossref's public pool allows five requests per second. Four rotating
-    // journals keep this well below that limit while varying the feed each day.
-    const responses=await Promise.allSettled(selectDigestSources().map(async source=>{
-      const url=`https://api.crossref.org/journals/${source.issn}/works?filter=from-pub-date:${from},type:journal-article&select=DOI,title,author,container-title&rows=12&sort=published&order=desc`;
+    const responses=await Promise.all(researchDigestSources.map(async source=>{
+      const url=`https://api.crossref.org/journals/${source.issn}/works?filter=from-pub-date:${from},type:journal-article&select=DOI,title,author&rows=12&sort=published&order=desc`;
       const response=await fetch(url,{headers:{Accept:'application/json'}}); if(!response.ok)throw new Error('Metadata request failed'); const payload=await response.json();
-      return (payload.message?.items||[]).map(item=>({track:source.track,doi:item.DOI,title:item.title?.[0]?.trim(),author:item.author?.[0]?.family?.trim() || 'Unknown author',journal:item['container-title']?.[0]?.trim() || 'Journal'}));
+      return (payload.message?.items||[]).map(item=>({track:source.track,doi:item.DOI,title:item.title?.[0]?.trim(),author:item.author?.[0]?.family?.trim() || 'Unknown author'}));
     }));
-    const papers=selectDigestPapers(responses.filter(result=>result.status==='fulfilled').flatMap(result=>result.value)); if(!papers.length)throw new Error('No recent articles found');
-    localStorage.setItem(researchDigestCacheKey,JSON.stringify({cachedAt:Date.now(),papers})); renderResearchDigest(papers);
+    const papers=selectDigestPapers(responses.flat()); if(!papers.length)throw new Error('No recent articles found');
+    localStorage.setItem(researchDigestCacheKey,JSON.stringify({day:digestDayKey(),papers})); renderResearchDigest(papers);
   } catch(error) { console.warn('Research digest unavailable:',error); renderResearchDigest([], 'Recent-paper metadata is unavailable right now.'); }
 }
 function renderHome(){ renderFocus();renderDeadlines();renderCards();renderInsights();renderTodayDate();renderWeekPlanner();renderReminders(); }
@@ -302,7 +292,7 @@ function renderDetail(){ const w=getWs(); if(!w)return; document.getElementById(
 function noteCard(n){return `<article class="note-card ${n.id===activeNoteId?'active':''}" data-open-note="${n.id}"><p class="note-date">${escapeHtml(n.date)}</p><h3>${escapeHtml(n.title)}</h3><p>${escapeHtml(n.body)}</p><button data-open-note="${n.id}">Open note →</button></article>`;}
 function escapeHtml(str=''){return String(str).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function applyTheme(){ const dark=data.theme==='dark'; document.body.classList.toggle('dark-theme',dark); const toggle=document.getElementById('themeToggle'); toggle.textContent=dark?'☀':'☾'; toggle.setAttribute('aria-label',dark?'Enable light mode':'Enable dark mode'); toggle.title=dark?'Enable light mode':'Enable dark mode'; }
-function renderAll(){ applyTheme();renderSidebar();renderHome();renderPortfolio();renderTaskOverview();renderRecovery();if(currentView==='detail')renderDetail(); }
+function renderAll(){ applyTheme();renderSidebar();renderHome();renderPortfolio();renderTaskOverview();if(currentView==='detail')renderDetail(); }
 
 function openView(view){ currentView=view; document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===`${view}View`)); document.querySelectorAll('.nav-link').forEach(b=>b.classList.toggle('active',b.dataset.view===view)); document.getElementById('sidebar').classList.remove('open'); window.scrollTo({top:0,behavior:'smooth'}); renderAll(); }
 function openWorkspace(id){activeWorkspace=id;activeTab='overview';currentView='detail';openView('detail');}
@@ -335,11 +325,15 @@ function createWorkspaceFromForm(){
 }
 async function deleteCurrentWorkspace(){
   const workspace=getWs(); if(!workspace)return;
-  if(!window.confirm(`Move “${workspace.name}” to Deleted items? You can restore it later.`))return;
-  moveToTrash('workspace',workspace);
+  const confirmation=window.prompt(`This permanently deletes “${workspace.name}”, including its notes, tasks, deadlines, and ${workspace.images?.length||0} private image(s).\n\nType the workspace name to confirm:`);
+  if(confirmation!==workspace.name){ toast('Workspace deletion cancelled'); return; }
+  if(workspace.images?.length){
+    const {error}=await supabaseClient.storage.from('project-images').remove(workspace.images.map(image=>image.path));
+    if(error){ console.error('Workspace image deletion failed:',error); toast('Workspace was kept because its images could not be deleted.'); return; }
+  }
   data.workspaces=data.workspaces.filter(item=>item.id!==workspace.id);
   activeWorkspace=activeWorkspaces()[0]?.id || data.workspaces[0]?.id || null;
-  saveData(); openView('workspaces'); toast(`${workspace.name} moved to Deleted items`);
+  saveData(); openView('workspaces'); toast(`${workspace.name} permanently deleted`);
 }
 function openWorkspaceEditor(){
   const workspace=getWs(); if(!workspace)return;
@@ -364,12 +358,12 @@ function saveWorkspaceEditor(){
 function openDateModal(){ document.getElementById('dateForm').reset(); document.getElementById('dateModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('timelineDate').focus(),10); }
 function closeDateModal(){ document.getElementById('dateModalBackdrop').hidden=true; }
 function saveDate(){ const workspace=getWs(); const date=document.getElementById('timelineDate').value; const title=document.getElementById('timelineTitle').value.trim(); if(!workspace || !date || !title)return; workspace.dates.push({date,title,type:document.getElementById('timelineType').value}); if(!workspace.deadline || date<workspace.deadline)workspace.deadline=date; saveData(); closeDateModal(); renderDetail(); toast('Key date added'); }
-function deleteDate(index){ const workspace=getWs(); const item=workspace?.dates[index]; if(!item || !window.confirm(`Move “${item.title}” to Deleted items?`))return; moveToTrash('date',item,workspace.id); workspace.dates.splice(index,1); saveData(); renderDetail(); toast('Key date moved to Deleted items'); }
+function deleteDate(index){ const workspace=getWs(); const item=workspace?.dates[index]; if(!item || !window.confirm(`Delete “${item.title}”?`))return; workspace.dates.splice(index,1); saveData(); renderDetail(); toast('Key date deleted'); }
 function openResourceModal(){ document.getElementById('resourceForm').reset(); document.getElementById('resourceModalBackdrop').hidden=false; setTimeout(()=>document.getElementById('resourceName').focus(),10); }
 function closeResourceModal(){ document.getElementById('resourceModalBackdrop').hidden=true; }
 function saveResource(){ const workspace=getWs(); const title=document.getElementById('resourceName').value.trim(); const url=document.getElementById('resourceUrl').value.trim(); if(!workspace || !title || !url)return; workspace.resources.push({title,url,meta:document.getElementById('resourceMeta').value.trim() || 'External link'}); saveData(); closeResourceModal(); renderDetail(); toast('Resource link added'); }
-function deleteResource(index){ const workspace=getWs(); const item=workspace?.resources[index]; if(!item || !window.confirm(`Move the link “${item.title}” to Deleted items?`))return; moveToTrash('resource',item,workspace.id); workspace.resources.splice(index,1); saveData(); renderDetail(); toast('Resource moved to Deleted items'); }
-function deleteTask(workspaceId,taskId){ const workspace=getWs(workspaceId); const task=workspace?.tasks.find(item=>item.id===taskId); if(!task || !window.confirm(`Move task “${task.title}” to Deleted items?`))return; moveToTrash('task',task,workspace.id); workspace.tasks=workspace.tasks.filter(item=>item.id!==taskId); saveData(); renderAll(); toast('Task moved to Deleted items'); }
+function deleteResource(index){ const workspace=getWs(); const item=workspace?.resources[index]; if(!item || !window.confirm(`Delete the link “${item.title}”?`))return; workspace.resources.splice(index,1); saveData(); renderDetail(); toast('Resource link deleted'); }
+function deleteTask(workspaceId,taskId){ const workspace=getWs(workspaceId); const task=workspace?.tasks.find(item=>item.id===taskId); if(!task || !window.confirm(`Delete task “${task.title}”?`))return; workspace.tasks=workspace.tasks.filter(item=>item.id!==taskId); saveData(); renderAll(); toast('Task deleted'); }
 function openTaskEditor(workspaceId,taskId){
   const workspace=getWs(workspaceId); const task=workspace?.tasks.find(item=>item.id===taskId); if(!task)return;
   editingTask={workspaceId,taskId};
@@ -410,7 +404,7 @@ function renderSearchResults(query){
   document.getElementById('searchResults').innerHTML=!term?'<p class="portfolio-empty">Search workspace names, tasks, notes, tags, and resources.</p>':results.length?results.slice(0,30).map(result=>`<button class="search-result" data-search-workspace="${result.workspaceId}" ${result.noteId?`data-search-note="${result.noteId}"`:''} ${result.tab?`data-search-tab="${result.tab}"`:''}><span>${result.type}</span><strong>${escapeHtml(result.title)}</strong><small>${escapeHtml(result.detail)}</small></button>`).join(''):'<p class="portfolio-empty">No matches found.</p>';
 }
 function saveActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note)return; note.title=document.getElementById('noteTitle').value.trim() || 'Untitled note'; note.body=document.getElementById('noteEditor').innerText.trim(); note.date=new Date().toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}).toUpperCase(); saveData(); renderDetail(); toast('Note saved'); }
-function deleteActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note || !window.confirm(`Move “${note.title}” to Deleted items?`))return; moveToTrash('note',note,workspace.id); workspace.notes=workspace.notes.filter(item=>item.id!==note.id); activeNoteId=workspace.notes[0]?.id || null; saveData(); renderDetail(); toast('Note moved to Deleted items'); }
+function deleteActiveNote(){ const workspace=getWs(); const note=workspace?.notes.find(item=>item.id===activeNoteId); if(!note || !window.confirm(`Delete “${note.title}”?`))return; workspace.notes=workspace.notes.filter(item=>item.id!==note.id); activeNoteId=workspace.notes[0]?.id || null; saveData(); renderDetail(); toast('Note deleted'); }
 
 document.addEventListener('click',e=>{
   const searchResult=e.target.closest('[data-search-workspace]'); if(searchResult){activeWorkspace=searchResult.dataset.searchWorkspace;activeTab=searchResult.dataset.searchTab || (searchResult.dataset.searchNote?'notes':'overview');if(searchResult.dataset.searchNote)activeNoteId=searchResult.dataset.searchNote;closeSearchModal();openView('detail');return;}
@@ -430,9 +424,6 @@ document.addEventListener('click',e=>{
   if(e.target.closest('#editWorkspaceButton'))openWorkspaceEditor();
   if(e.target.closest('#toggleWorkspaceStatus')){const w=getWs(); if(w.status==='completed'){setWorkspaceState(w,'on_track');toast(`${w.name} restored to active work`);}else{setWorkspaceState(w,'finished');toast(`${w.name} marked as finished`);}saveData();renderAll();}
   if(e.target.closest('#deleteWorkspaceButton'))deleteCurrentWorkspace();
-  if(e.target.closest('#exportDashboard'))exportDashboard();
-  if(e.target.closest('#importDashboard'))document.getElementById('backupImport').click();
-  if(e.target.closest('[data-restore-trash]'))restoreTrashItem(e.target.closest('[data-restore-trash]').dataset.restoreTrash);
   if(e.target.closest('#closeModal'))closeModal();
   if(e.target.closest('#closeWorkspaceModal'))closeWorkspaceModal();
   if(e.target.closest('#closeWorkspaceEditor'))closeWorkspaceEditor();
@@ -473,7 +464,6 @@ document.getElementById('taskEditorBackdrop').addEventListener('click',e=>{if(e.
 document.getElementById('taskEditorForm').addEventListener('submit',e=>{e.preventDefault();saveTaskEditor();});
 document.getElementById('searchModalBackdrop').addEventListener('click',e=>{if(e.target.id==='searchModalBackdrop')closeSearchModal();});
 document.getElementById('searchInput').addEventListener('input',e=>renderSearchResults(e.target.value));
-document.getElementById('backupImport').addEventListener('change',e=>{const file=e.target.files?.[0];if(file)importDashboardFile(file);e.target.value='';});
 renderAll();
 loadResearchDigest();
 initializeCloud();
