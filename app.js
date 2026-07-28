@@ -249,6 +249,7 @@ function selectDigestPapers(papers){
   const ai=pick(unique.filter(item=>item.track==='AI'),2);
   return [...evolution,...ai].sort(()=>random()-.5);
 }
+function selectDigestSources(){ const random=digestRandom(`${digestDayKey()}-sources`); const select=track=>researchDigestSources.filter(source=>source.track===track).sort(()=>random()-.5).slice(0,2); return [...select('Evolution & population genomics'),...select('AI')]; }
 function renderResearchDigest(papers, status=''){
   const copy=document.getElementById('researchDigestCopy'); const menu=document.getElementById('researchDigestMenu'); if(!copy||!menu)return;
   if(!papers?.length){ copy.textContent=status || 'Research digest unavailable'; menu.innerHTML=`<p class="digest-feed-note">${escapeHtml(status || 'We could not load recent papers. Please try again later.')}</p>`; return; }
@@ -260,12 +261,14 @@ async function loadResearchDigest(){
   const cached=readDigestCache(); if(cached){ renderResearchDigest(cached.papers); return; }
   const since=new Date(); since.setDate(since.getDate()-120); const from=localDateKey(since);
   try {
-    const responses=await Promise.all(researchDigestSources.map(async source=>{
+    // Crossref's public pool allows five requests per second. Four rotating
+    // journals keep this well below that limit while varying the feed each day.
+    const responses=await Promise.allSettled(selectDigestSources().map(async source=>{
       const url=`https://api.crossref.org/journals/${source.issn}/works?filter=from-pub-date:${from},type:journal-article&select=DOI,title,author&rows=12&sort=published&order=desc`;
       const response=await fetch(url,{headers:{Accept:'application/json'}}); if(!response.ok)throw new Error('Metadata request failed'); const payload=await response.json();
       return (payload.message?.items||[]).map(item=>({track:source.track,doi:item.DOI,title:item.title?.[0]?.trim(),author:item.author?.[0]?.family?.trim() || 'Unknown author'}));
     }));
-    const papers=selectDigestPapers(responses.flat()); if(!papers.length)throw new Error('No recent articles found');
+    const papers=selectDigestPapers(responses.filter(result=>result.status==='fulfilled').flatMap(result=>result.value)); if(!papers.length)throw new Error('No recent articles found');
     localStorage.setItem(researchDigestCacheKey,JSON.stringify({day:digestDayKey(),papers})); renderResearchDigest(papers);
   } catch(error) { console.warn('Research digest unavailable:',error); renderResearchDigest([], 'Recent-paper metadata is unavailable right now.'); }
 }
