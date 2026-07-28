@@ -30,6 +30,7 @@ let supabaseClient = null;
 let cloudUser = null;
 let cloudEnabled = false;
 let cloudSaveTimer = null;
+let researchDigestTimer = null;
 
 // Review this list once per year against the chosen journal-ranking source. The
 // feed deliberately stores ISSNs rather than trying to infer a journal's quartile
@@ -46,7 +47,8 @@ const researchDigestSources = [
   {track:'AI',issn:'0885-6125'}, // Machine Learning
   {track:'AI',issn:'0162-8828'} // IEEE Transactions on Pattern Analysis and Machine Intelligence
 ];
-const researchDigestCacheKey = 'fieldwork-research-digest-v1';
+const researchDigestCacheKey = 'fieldwork-research-digest-v2';
+const researchDigestRefreshMs = 5*60*60*1000;
 
 function parseLegacyTaskDue(value){
   const label=String(value||'').trim(); if(!label || /^(no date|when resumed)$/i.test(label))return '';
@@ -240,23 +242,24 @@ function renderTaskOverview(){
   document.querySelectorAll('[data-task-filter]').forEach(button=>button.classList.toggle('active',button.dataset.taskFilter===taskFilter));
 }
 function taskHtmlForOverview(task){ return taskHtml(task,task.workspace,true,true); }
-function digestDayKey(){ return localDateKey(new Date()); }
+function digestCycleKey(){ return String(Math.floor(Date.now()/researchDigestRefreshMs)); }
 function digestRandom(seed){ let value=0; for(const char of seed)value=(value*31+char.charCodeAt(0))>>>0; return ()=>{value=(value*1664525+1013904223)>>>0;return value/4294967296;}; }
 function selectDigestPapers(papers){
-  const random=digestRandom(digestDayKey()); const unique=[...new Map(papers.filter(item=>item.title&&item.doi).map(item=>[item.doi,item])).values()];
+  const random=digestRandom(digestCycleKey()); const unique=[...new Map(papers.filter(item=>item.title&&item.doi).map(item=>[item.doi,item])).values()];
   const pick=(items,count)=>[...items].sort(()=>random()-.5).slice(0,count);
-  const evolution=pick(unique.filter(item=>item.track==='Evolution & population genomics'),2);
-  const ai=pick(unique.filter(item=>item.track==='AI'),2);
+  const evolution=pick(unique.filter(item=>item.track==='Evolution & population genomics'),5);
+  const ai=pick(unique.filter(item=>item.track==='AI'),5);
   return [...evolution,...ai].sort(()=>random()-.5);
 }
-function selectDigestSources(){ const random=digestRandom(`${digestDayKey()}-sources`); const select=track=>researchDigestSources.filter(source=>source.track===track).sort(()=>random()-.5).slice(0,2); return [...select('Evolution & population genomics'),...select('AI')]; }
+function selectDigestSources(){ const random=digestRandom(`${digestCycleKey()}-sources`); const select=track=>researchDigestSources.filter(source=>source.track===track).sort(()=>random()-.5).slice(0,2); return [...select('Evolution & population genomics'),...select('AI')]; }
+function showDigestHeadline(papers,index=0){ const copy=document.getElementById('researchDigestCopy'); const paper=papers[index]; if(!copy||!paper)return; copy.textContent=`${paper.title} — ${paper.author} · ${paper.journal}`; copy.classList.remove('cycling'); void copy.offsetWidth; copy.classList.add('cycling'); }
 function renderResearchDigest(papers, status=''){
   const copy=document.getElementById('researchDigestCopy'); const menu=document.getElementById('researchDigestMenu'); if(!copy||!menu)return;
-  if(!papers?.length){ copy.textContent=status || 'Research digest unavailable'; menu.innerHTML=`<p class="digest-feed-note">${escapeHtml(status || 'We could not load recent papers. Please try again later.')}</p>`; return; }
-  copy.textContent=`${papers[0].title} — ${papers[0].author}`;
-  menu.innerHTML=`<p class="digest-menu-heading">RECENT PAPERS · EVOLUTION, POPULATION GENOMICS & AI</p>${papers.map(paper=>`<a class="digest-paper" href="https://doi.org/${encodeURIComponent(paper.doi)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.author)}</span></a>`).join('')}<p class="digest-feed-note">A rotating selection from the dashboard’s curated Q1 source list. Journal rankings should be reviewed annually.</p>`;
+  clearInterval(researchDigestTimer); if(!papers?.length){ copy.textContent=status || 'Research digest unavailable'; menu.innerHTML=`<p class="digest-feed-note">${escapeHtml(status || 'We could not load recent papers. Please try again later.')}</p>`; return; }
+  showDigestHeadline(papers); let index=0; researchDigestTimer=setInterval(()=>{index=(index+1)%papers.length;showDigestHeadline(papers,index);},7000);
+  menu.innerHTML=`<p class="digest-menu-heading">RECENT PAPERS · EVOLUTION, POPULATION GENOMICS & AI</p>${papers.map(paper=>`<a class="digest-paper" href="https://doi.org/${encodeURIComponent(paper.doi)}" target="_blank" rel="noopener noreferrer"><strong>${escapeHtml(paper.title)}</strong><span>${escapeHtml(paper.author)} · ${escapeHtml(paper.journal)}</span></a>`).join('')}<p class="digest-feed-note">A rotating selection of ten papers, refreshed every five hours, from the dashboard’s curated Q1 source list. Journal rankings should be reviewed annually.</p>`;
 }
-function readDigestCache(){ try { const cached=JSON.parse(localStorage.getItem(researchDigestCacheKey)); return cached?.day===digestDayKey()&&Array.isArray(cached.papers)?cached:null; } catch { return null; } }
+function readDigestCache(){ try { const cached=JSON.parse(localStorage.getItem(researchDigestCacheKey)); return cached?.cachedAt&&Date.now()-cached.cachedAt<researchDigestRefreshMs&&Array.isArray(cached.papers)?cached:null; } catch { return null; } }
 async function loadResearchDigest(){
   const cached=readDigestCache(); if(cached){ renderResearchDigest(cached.papers); return; }
   const since=new Date(); since.setDate(since.getDate()-120); const from=localDateKey(since);
@@ -264,12 +267,12 @@ async function loadResearchDigest(){
     // Crossref's public pool allows five requests per second. Four rotating
     // journals keep this well below that limit while varying the feed each day.
     const responses=await Promise.allSettled(selectDigestSources().map(async source=>{
-      const url=`https://api.crossref.org/journals/${source.issn}/works?filter=from-pub-date:${from},type:journal-article&select=DOI,title,author&rows=12&sort=published&order=desc`;
+      const url=`https://api.crossref.org/journals/${source.issn}/works?filter=from-pub-date:${from},type:journal-article&select=DOI,title,author,container-title&rows=12&sort=published&order=desc`;
       const response=await fetch(url,{headers:{Accept:'application/json'}}); if(!response.ok)throw new Error('Metadata request failed'); const payload=await response.json();
-      return (payload.message?.items||[]).map(item=>({track:source.track,doi:item.DOI,title:item.title?.[0]?.trim(),author:item.author?.[0]?.family?.trim() || 'Unknown author'}));
+      return (payload.message?.items||[]).map(item=>({track:source.track,doi:item.DOI,title:item.title?.[0]?.trim(),author:item.author?.[0]?.family?.trim() || 'Unknown author',journal:item['container-title']?.[0]?.trim() || 'Journal'}));
     }));
     const papers=selectDigestPapers(responses.filter(result=>result.status==='fulfilled').flatMap(result=>result.value)); if(!papers.length)throw new Error('No recent articles found');
-    localStorage.setItem(researchDigestCacheKey,JSON.stringify({day:digestDayKey(),papers})); renderResearchDigest(papers);
+    localStorage.setItem(researchDigestCacheKey,JSON.stringify({cachedAt:Date.now(),papers})); renderResearchDigest(papers);
   } catch(error) { console.warn('Research digest unavailable:',error); renderResearchDigest([], 'Recent-paper metadata is unavailable right now.'); }
 }
 function renderHome(){ renderFocus();renderDeadlines();renderCards();renderInsights();renderTodayDate();renderWeekPlanner();renderReminders(); }
