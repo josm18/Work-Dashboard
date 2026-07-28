@@ -18,7 +18,9 @@
         </a>
         <nav class="main-nav" aria-label="Primary navigation">
           <button class="nav-link active" data-view="home"><span>⌂</span>Overview</button>
+          <button class="nav-link" data-view="tasks"><span>✓</span>Tasks</button>
           <button class="nav-link" data-view="workspaces"><span>◫</span>Workspaces</button>
+          <button class="nav-link" data-view="deleted"><span>⌫</span>Deleted items</button>
         </nav>
         <div class="sidebar-label">WORKSPACES</div>
         <div class="workspace-nav" id="workspaceNav"></div>
@@ -33,7 +35,13 @@
       <main class="main-content">
         <header class="topbar">
           <button class="menu-button" id="menuButton" aria-label="Open navigation">☰</button>
-          <div class="breadcrumb" id="breadcrumb"><span>Monday, 27 July</span></div>
+          <div class="breadcrumb" id="breadcrumb">
+            <button class="research-digest" id="researchDigestButton" aria-expanded="false" aria-controls="researchDigestMenu">
+              <span class="research-digest-label">RESEARCH DIGEST</span>
+              <span class="research-digest-copy" id="researchDigestCopy">Loading recent papers…</span>
+            </button>
+            <section class="research-digest-menu" id="researchDigestMenu" hidden aria-label="Recent research papers"></section>
+          </div>
           <div class="topbar-actions">
             <button class="icon-button theme-toggle" id="themeToggle" aria-label="Enable dark mode" title="Enable dark mode">☾</button>
             <button class="icon-button" id="searchButton" aria-label="Search">⌕</button>
@@ -80,6 +88,17 @@
           <div class="page-heading compact"><div><p class="eyebrow">YOUR PORTFOLIO</p><h1>Workspaces</h1><p class="subheading">Projects and courses in one place.</p></div><button class="quick-add" id="newWorkspaceTop">+ New workspace</button></div>
           <div class="filter-bar" id="filterBar"><button class="filter active" data-filter="all">Active</button><button class="filter" data-filter="project">Projects</button><button class="filter" data-filter="course">Courses</button><button class="filter" data-filter="attention">Needs attention</button><button class="filter" data-filter="completed">Completed</button></div>
           <div class="portfolio-list" id="portfolioList"></div>
+        </section>
+
+        <section class="view" id="tasksView">
+          <div class="page-heading compact"><div><p class="eyebrow">TASKS</p><h1>Keep work moving.</h1><p class="subheading" id="taskOverviewSummary"></p></div><button class="quick-add" id="taskOverviewAdd">+ Add task</button></div>
+          <div class="filter-bar task-filter-bar" id="taskFilterBar"><button class="filter active" data-task-filter="today">Today</button><button class="filter" data-task-filter="upcoming">Upcoming</button><button class="filter" data-task-filter="overdue">Overdue</button><button class="filter" data-task-filter="no-date">No date</button><button class="filter" data-task-filter="completed">Completed</button><button class="filter" data-task-filter="all">All open</button></div>
+          <section class="panel task-overview-panel"><div class="task-list" id="taskOverviewList"></div></section>
+        </section>
+
+        <section class="view" id="deletedView">
+          <div class="page-heading compact"><div><p class="eyebrow">RECOVERY</p><h1>Deleted items.</h1><p class="subheading">Restore work you deleted by mistake, or keep it here as a safety net.</p></div><div class="recovery-actions"><button class="archive-button" id="exportDashboard">Export backup</button><button class="archive-button" id="importDashboard">Import backup</button></div></div>
+          <section class="panel"><div class="recovery-list" id="recoveryList"></div></section>
         </section>
 
         <section class="view workspace-view" id="detailView">
@@ -159,6 +178,7 @@
       </section>
     </div>
     <input id="imageUpload" type="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden />
+    <input id="backupImport" type="file" accept="application/json,.json" hidden />
     <div class="toast" id="toast" role="status"></div>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script src="supabase-config.js"></script>
